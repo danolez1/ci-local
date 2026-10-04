@@ -35,6 +35,10 @@ esac`);
   stub(bin, "crane", `echo "crane $*" >> "${calls}"
 case "$1" in
   manifest) [ -f "${base}/exists" ] && exit 0; exit 1 ;;
+  push)
+    [ -f "${base}/fail-push-always" ] && { echo "connection reset" >&2; exit 1; }
+    [ -f "${base}/fail-push-once" ] && { rm "${base}/fail-push-once"; echo "use of closed network connection" >&2; exit 1; }
+    exit 0 ;;
   *) exit 0 ;;
 esac`);
   const cfg = join(base, "cfg");
@@ -113,4 +117,30 @@ test("pushing another branch does not build", async () => {
   const r = await exec(["git", "-C", repo, "push", "origin", "side"], { env });
   expect(r.code).toBe(0);
   expect(log()).toBe("");
+});
+
+test("a dropped upload is retried and the push still goes through", async () => {
+  writeFileSync(join(repo, "retry.txt"), "change\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "retry");
+  writeFileSync(join(base, "fail-push-once"), "");
+  writeFileSync(calls, "");
+  const r = await push();
+  expect(r.code).toBe(0);
+  expect(log().match(/^crane push /gm)?.length).toBe(2);
+});
+
+test("an upload that keeps failing stops the push after three attempts and says so", async () => {
+  writeFileSync(join(repo, "stuck.txt"), "change\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "stuck");
+  writeFileSync(join(base, "fail-push-always"), "");
+  writeFileSync(calls, "");
+  const before = (await must(["git", "-C", remote, "rev-parse", "main"])).trim();
+  const r = await push();
+  rmSync(join(base, "fail-push-always"));
+  expect(r.code).not.toBe(0);
+  expect(r.err).toContain("after 3 attempts");
+  expect(log().match(/^crane push /gm)?.length).toBe(3);
+  expect((await must(["git", "-C", remote, "rev-parse", "main"])).trim()).toBe(before);
 });

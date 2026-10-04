@@ -36,7 +36,7 @@ profiles:
 
 | transport | how it reaches the registry |
 |---|---|
-| `ssh` | Port-forward to a registry that only listens on the server's loopback. No credentials, and no request-size cap from a CDN in front (Cloudflare documents a 100 MB request-body limit on Free and Pro, which breaks large image layers). |
+| `ssh` | Port-forward to a registry that only listens on the server's loopback. No credentials, and no request-size cap from a CDN in front (Cloudflare documents a 100 MB request-body limit on Free and Pro, which breaks large image layers). A dropped connection is retried up to three times, reopening the tunnel if ssh exited, and layers already uploaded are skipped. |
 | `https` | Straight to the registry with the credentials in `~/.docker/config.json`. |
 | `direct` | Same as `https` for a registry you reach as is. Set `insecure: true` for plain http. |
 
