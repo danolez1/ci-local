@@ -35,10 +35,12 @@
   }
   * { box-sizing: border-box; }
   html { color-scheme: light dark; }
-  body { margin: 0; background: var(--canvas); color: var(--fg); font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif; }
+  @font-face { font-family: Urbanist; src: url("/fonts/Urbanist.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: swap; }
+  :root { --sans: Urbanist, system-ui, -apple-system, "Segoe UI", sans-serif; --mono: Menlo, Monaco, "SF Mono", ui-monospace, Consolas, monospace; --log-size: 13px; --log-leading: 1.3; }
+  body { margin: 0; background: var(--canvas); color: var(--fg); font: 15px/1.5 var(--sans); }
   a { color: var(--accent); text-decoration: none; } a:hover { text-decoration: underline; }
   button, input, select { font: inherit; color: inherit; }
-  code, pre, .mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  code, pre, .mono { font-family: var(--mono); }
 
   header.top { background: var(--header); color: var(--header-fg); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 56px; position: sticky; top: 0; z-index: 20; }
   .brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: inherit; font-size: 16px; }
@@ -143,11 +145,11 @@
   .logbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--subtle); border-bottom: 1px solid var(--border); flex-wrap: wrap; color: var(--fg); }
   .logbar input[type=search] { height: 28px; border: 1px solid var(--border); border-radius: 6px; padding: 0 8px; background: var(--canvas); min-width: 160px; }
   .logbar label { display: inline-flex; gap: 4px; align-items: center; font-size: 12px; color: var(--muted); cursor: pointer; }
-  .logbody { max-height: 70vh; overflow: auto; font-size: 12px; line-height: 1.55; padding: 4px 0; }
+  .logbody { max-height: 70vh; overflow: auto; font: var(--log-size)/var(--log-leading) var(--mono); font-variant-ligatures: none; tab-size: 8; padding: 4px 0; }
   .logbody .gh { display: flex; gap: 8px; padding: 6px 12px 2px; margin-top: 6px; color: var(--code-muted); font-weight: 600; border-top: 1px solid var(--log-line); }
   .logbody .gh:first-child { margin-top: 0; border-top: 0; }
   .logbody .t { margin-left: auto; font-weight: 400; }
-  .logbody .l { padding: 0 12px; white-space: pre; min-height: 18px; } .wrap .logbody .l { white-space: pre-wrap; word-break: break-word; }
+  .logbody .l { padding: 0 12px; white-space: pre; } .wrap .logbody .l { white-space: pre-wrap; word-break: break-word; }
   .logbody .l.hit { background: var(--hit); } .logbody .l.err { color: var(--err); }
   .a1 { font-weight: 700; } .a2 { opacity: .7; } .a3 { font-style: italic; } .a4 { text-decoration: underline; }
   .a30 { color: var(--a30); } .a31 { color: var(--a31); } .a32 { color: var(--a32); } .a33 { color: var(--a33); } .a34 { color: var(--a34); } .a35 { color: var(--a35); } .a36 { color: var(--a36); } .a37 { color: var(--a37); }
@@ -162,7 +164,7 @@
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; width: max-content; }
   .seg button { background: var(--subtle); border: 0; padding: 4px 14px; cursor: pointer; border-right: 1px solid var(--border); }
   .seg button:last-child { border-right: 0; } .seg button.on { background: var(--accent); color: #fff; }
-  kbd { background: var(--subtle); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 0 6px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  kbd { background: var(--subtle); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 0 6px; font-family: var(--mono); font-size: 12px; }
   table.keys { border-collapse: collapse; width: 100%; } table.keys td { padding: 4px 0; } table.keys td:first-child { width: 120px; }
   pre.cli { background: var(--subtle); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 0; overflow: auto; font-size: 12px; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #24292f; color: #fff; padding: 8px 16px; border-radius: 6px; z-index: 50; box-shadow: var(--shadow); }

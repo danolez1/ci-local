@@ -195,3 +195,11 @@ test("run --background reports why the child failed instead of claiming it start
   expect(r.code).toBe(1);
   expect(r.err).toContain("no ci-local.yaml");
 }, 60000);
+
+test("the page serves its bundled font from its own origin", async () => {
+  const font = await get("/fonts/Urbanist.ttf");
+  expect(font.status).toBe(200);
+  expect(font.headers.get("content-type")).toBe("font/ttf");
+  expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(50_000);
+  expect((await fetch(`http://${host}/fonts/Urbanist.ttf`, { headers: { host: "evil.test" } })).status).toBe(403);
+});

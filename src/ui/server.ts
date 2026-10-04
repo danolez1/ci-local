@@ -1,4 +1,5 @@
 import pkg from "../../package.json" with { type: "json" };
+import urbanist from "./fonts/Urbanist.ttf" with { type: "file" };
 import pageSource from "./index.html" with { type: "text" };
 import { logPath, queryRuns, readLog, readRun, runStats, stateHome } from "../store.ts";
 
@@ -32,6 +33,7 @@ function route(req: Request): Response {
   const path = url.pathname;
   const q = url.searchParams;
   if (path === "/") return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", ...SECURITY_HEADERS } });
+  if (path === "/fonts/Urbanist.ttf") return new Response(Bun.file(urbanist), { headers: { "content-type": "font/ttf", "cache-control": "public, max-age=86400", ...SECURITY_HEADERS } });
   if (path === "/api/info") return json(req, { name: pkg.name, version: pkg.version, state: stateHome() });
   if (path === "/api/runs") {
     return json(
