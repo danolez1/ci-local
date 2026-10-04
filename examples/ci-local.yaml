@@ -1,0 +1,12 @@
+# Copy to the root of a repo, or run: ci-local init --image acme/web
+version: 1
+profile: vps
+branches: [main]
+images:
+  - name: web
+    image: acme/web
+    dockerfile: Dockerfile
+    context: .
+    tag_exclude: [.github, docs, README.md]
+    # Public values only (NEXT_PUBLIC_*, VITE_*). ci-local refuses anything that looks like a secret.
+    # build_env: infra/build.env

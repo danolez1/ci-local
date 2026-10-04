@@ -1,0 +1,11 @@
+# Copy to ~/.config/ci-local/config.yaml. Profiles say where images are published.
+default_profile: vps
+profiles:
+  vps:
+    transport: ssh              # reach a loopback-only registry through an ssh port-forward
+    ssh_host: my-vps            # alias from ~/.ssh/config, or user@host
+    registry: 127.0.0.1:5000    # the registry's address as seen from the VPS
+    pull_registry: 127.0.0.1:5000
+  hub:
+    transport: https            # docker login registry.example.com once
+    registry: registry.example.com

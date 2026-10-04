@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ci-local</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1b1f24; --muted: #667085; --line: #e3e6eb;
+    --ok: #1a7f4b; --bad: #c0362c; --run: #1f6feb; --skip: #8a6d00; --code: #0f1720; --codefg: #d6deeb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0e1116; --panel: #151a21; --text: #e6e9ee; --muted: #8b95a5; --line: #262d38; --code: #0a0d12; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 ui-sans-serif, system-ui, sans-serif; }
+  header { display: flex; align-items: baseline; gap: 12px; padding: 14px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { margin: 0; font-size: 16px; }
+  header span { color: var(--muted); font-size: 12px; }
+  main { display: grid; grid-template-columns: minmax(320px, 420px) 1fr; gap: 16px; padding: 16px 20px; align-items: start; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .row { display: grid; grid-template-columns: 10px 1fr auto; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
+  .row:last-child { border-bottom: 0; }
+  .row:hover, .row.sel { background: color-mix(in srgb, var(--run) 8%, transparent); }
+  .dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 5px; background: var(--muted); }
+  .success .dot { background: var(--ok); } .failed .dot { background: var(--bad); }
+  .running .dot { background: var(--run); animation: pulse 1.2s infinite; } .skipped .dot, .dry-run .dot { background: var(--skip); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  .name { font-weight: 600; } .meta { color: var(--muted); font-size: 12px; }
+  .when { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .detail { padding: 14px; }
+  .phases { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+  .phase { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
+  .phase.done { color: var(--ok); } .phase.failed { color: var(--bad); } .phase.running { color: var(--run); }
+  pre { margin: 0; padding: 12px 14px; background: var(--code); color: var(--codefg); font: 12px/1.5 ui-monospace, Menlo, monospace; overflow: auto; max-height: 60vh; white-space: pre-wrap; word-break: break-word; }
+  .empty { padding: 24px; color: var(--muted); text-align: center; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+  .err { color: var(--bad); margin: 6px 0; }
+</style>
+</head>
+<body>
+<header><h1>ci-local</h1><span id="where"></span></header>
+<main>
+  <section class="panel" id="list"><div class="empty">Loading runs</div></section>
+  <section class="panel" id="detail"><div class="empty">Select a run to follow its log.</div></section>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let selected = null, offset = 0, follow = true;
+
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  return Math.round(s / 3600) + "h ago";
+};
+const dur = (a, b) => {
+  const s = Math.round(((b ? new Date(b) : new Date()) - new Date(a)) / 1000);
+  return s >= 60 ? Math.floor(s / 60) + "m " + (s % 60) + "s" : s + "s";
+};
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+async function refreshList() {
+  const runs = await (await fetch("/api/runs")).json();
+  $("list").innerHTML = runs.length ? runs.map((r) =>
+    '<div class="row ' + r.status + (r.id === selected ? " sel" : "") + '" data-id="' + esc(r.id) + '">' +
+    '<div class="dot"></div><div><div class="name">' + esc(r.image) + '</div>' +
+    '<div class="meta">' + esc(r.repo) + " · " + esc(r.sha.slice(0, 8)) + (r.tag ? " · " + esc(r.tag) : "") + " · " + esc(r.profile) + "</div></div>" +
+    '<div class="when">' + esc(r.status) + "<br>" + ago(r.started) + "</div></div>").join("") : '<div class="empty">No runs yet.</div>';
+  document.querySelectorAll(".row").forEach((el) => el.onclick = () => select(el.dataset.id));
+}
+
+function select(id) { selected = id; offset = 0; $("detail").innerHTML = ""; refreshDetail(true); refreshList(); }
+
+async function refreshDetail(reset) {
+  if (!selected) return;
+  const run = await (await fetch("/api/runs/" + selected)).json();
+  if (reset || !$("log")) {
+    $("detail").innerHTML = '<div class="detail"><div class="name">' + esc(run.image) + '</div><div class="meta" id="meta"></div><div id="err"></div><div class="phases" id="phases"></div></div><pre id="log"></pre>';
+    $("log").addEventListener("scroll", () => { const l = $("log"); follow = l.scrollTop + l.clientHeight >= l.scrollHeight - 20; });
+  }
+  $("meta").textContent = run.status + " · " + dur(run.started, run.ended) + (run.pull_ref ? " · deploy image " + run.pull_ref : "");
+  $("err").innerHTML = run.error ? '<div class="err">' + esc(run.error) + "</div>" : "";
+  $("phases").innerHTML = run.phases.map((p) => '<span class="phase ' + p.status + '">' + esc(p.name) + " " + dur(p.started, p.ended) + "</span>").join("");
+  const log = await (await fetch("/api/runs/" + selected + "/log?offset=" + offset)).json();
+  if (log.text) { $("log").textContent += log.text; offset = log.next; if (follow) $("log").scrollTop = $("log").scrollHeight; }
+}
+
+setInterval(() => { refreshList(); refreshDetail(false); }, 1500);
+refreshList().then(() => { const first = document.querySelector(".row"); if (first) select(first.dataset.id); });
+fetch("/api/info").then((r) => r.json()).then((i) => { $("where").textContent = i.state; });
+</script>
+</body>
+</html>
