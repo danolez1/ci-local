@@ -1,11 +1,64 @@
+import pkg from "../../package.json" with { type: "json" };
 import pageSource from "./index.html" with { type: "text" };
-import { listRuns, readLog, readRun, stateHome } from "../store.ts";
+import { logPath, queryRuns, readLog, readRun, runStats, stateHome } from "../store.ts";
 
 // @types/bun types .html imports as a bundle; with the text attribute the runtime value is the file contents.
 const page = pageSource as unknown as string;
 
-const json = (body: unknown, status = 200): Response =>
-  new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", "cache-control": "no-store" } });
+// The page only needs its own origin; the policy also blunts any future injection and blocks framing.
+const SECURITY_HEADERS = {
+  "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'",
+  "x-content-type-options": "nosniff",
+  "referrer-policy": "no-referrer",
+};
+
+function json(req: Request, body: unknown, status = 200): Response {
+  const text = JSON.stringify(body);
+  // A tag over the body lets the page's polling get a 304 instead of re-downloading an unchanged list.
+  const etag = `"${Bun.hash(text).toString(16)}"`;
+  const headers = { "content-type": "application/json", "cache-control": "no-store", etag, ...SECURITY_HEADERS };
+  if (status === 200 && req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
+  return new Response(text, { status, headers });
+}
+
+function int(value: string | null, fallback: number): number {
+  const n = Number.parseInt(value ?? "", 10);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function route(req: Request): Response {
+  if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.get("host") ?? "")) return json(req, { error: "forbidden" }, 403);
+  const url = new URL(req.url);
+  const path = url.pathname;
+  const q = url.searchParams;
+  if (path === "/") return new Response(page, { headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-cache", ...SECURITY_HEADERS } });
+  if (path === "/api/info") return json(req, { name: pkg.name, version: pkg.version, state: stateHome() });
+  if (path === "/api/runs") {
+    return json(
+      req,
+      queryRuns({
+        page: int(q.get("page"), 1),
+        perPage: int(q.get("per_page"), 25),
+        status: q.get("status") || undefined,
+        repo: q.get("repo") || undefined,
+        image: q.get("image") || undefined,
+        q: q.get("q") || undefined,
+      }),
+    );
+  }
+  if (path === "/api/stats") return json(req, runStats());
+  const m = path.match(/^\/api\/runs\/([\w.-]+)(\/log|\/raw)?$/);
+  if (!m) return json(req, { error: "not found" }, 404);
+  const id = m[1] as string;
+  if (m[2] === "/raw") {
+    const file = logPath(id);
+    if (!file || !Bun.file(file).size) return json(req, { error: "not found" }, 404);
+    return new Response(Bun.file(file), { headers: { "content-type": "text/plain; charset=utf-8", ...SECURITY_HEADERS } });
+  }
+  if (m[2]) return json(req, readLog(id, int(q.get("offset"), 0), int(q.get("limit"), 262_144)));
+  const run = readRun(id);
+  return run ? json(req, run) : json(req, { error: "not found" }, 404);
+}
 
 // Loopback only, and the Host header is checked, because logs can name internal hosts.
 export function startUi(port: number): ReturnType<typeof Bun.serve> {
@@ -13,20 +66,12 @@ export function startUi(port: number): ReturnType<typeof Bun.serve> {
     port,
     hostname: "127.0.0.1",
     fetch(req) {
-      if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.get("host") ?? "")) return json({ error: "forbidden" }, 403);
-      const url = new URL(req.url);
-      const path = url.pathname;
-      if (path === "/") return new Response(page, { headers: { "content-type": "text/html; charset=utf-8" } });
-      if (path === "/api/info") return json({ state: stateHome() });
-      if (path === "/api/runs") return json(listRuns(50));
-      const m = path.match(/^\/api\/runs\/([\w.-]+)(\/log)?$/);
-      if (m) {
-        const id = m[1] as string;
-        if (m[2]) return json(readLog(id, Number(url.searchParams.get("offset") ?? 0) || 0));
-        const run = readRun(id);
-        return run ? json(run) : json({ error: "not found" }, 404);
+      // A malformed Host would otherwise surface as a 500 from URL parsing.
+      try {
+        return route(req);
+      } catch {
+        return json(req, { error: "bad request" }, 400);
       }
-      return json({ error: "not found" }, 404);
     },
   });
 }

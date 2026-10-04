@@ -128,6 +128,9 @@ export function parseRepoConfig(text: string): RepoConfig {
       if (!image || !name) return;
       if (seen.has(name)) problems.push(`${where}.name '${name}' is used twice`);
       seen.add(name);
+      if (item.build_env_local !== undefined && (item.build_env_local === item.build_env || item.build_env_local === item.build_args_file)) {
+        problems.push(`${where}.build_env_local must be a different file from build_env and build_args_file`);
+      }
       images.push({
         name,
         image,
@@ -136,6 +139,7 @@ export function parseRepoConfig(text: string): RepoConfig {
         platform: str(item.platform, `${where}.platform`, problems),
         build_args_file: relPath(item.build_args_file, `${where}.build_args_file`, problems),
         build_env: relPath(item.build_env, `${where}.build_env`, problems),
+        build_env_local: relPath(item.build_env_local, `${where}.build_env_local`, problems),
         tag_include: item.tag_include === undefined ? defaults.tag_include : strList(item.tag_include, `${where}.tag_include`, problems),
         tag_exclude: item.tag_exclude === undefined ? defaults.tag_exclude : strList(item.tag_exclude, `${where}.tag_exclude`, problems),
       });

@@ -1,12 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadGlobalConfig, loadRepoConfig, resolveProfile } from "./config.ts";
+import { agentInstalled, DEFAULT_PORT, installAgent, readDaemon, registerDaemon, startDaemon, stopDaemon, uiLogFile, uninstallAgent } from "./daemon.ts";
 import { daemonProxies, PROXY_HINT } from "./docker.ts";
 import { runImage, type RunFlags } from "./engine.ts";
 import { guardBuildEnv } from "./envguard.ts";
-import { exec, has } from "./exec.ts";
+import { childEnv, exec, has } from "./exec.ts";
 import { checkedOutRef, committedFile, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
+import { isSafeRelative, readExtractedFile } from "./paths.ts";
 import { findEarlyExit, findHookTarget, installHook, isInstalled, isLastStep, isShellHook, uninstallHook, type HookKind } from "./hooks.ts";
 import { latestRunId, listRuns, readLog, readRun, stateHome } from "./store.ts";
 import type { RepoConfig, RunRecord } from "./types.ts";
@@ -16,13 +19,16 @@ import { watch } from "./watch.ts";
 const HELP = `ci-local: build images on this machine and publish them to a registry before git pushes.
 
   ci-local run [flags]            build and publish the images of this repo for HEAD (or --sha)
+  ci-local run --background       same, detached from this terminal; follow it with logs -f or the web view
   ci-local run --stdin            same, with the job given as YAML or JSON on stdin
   ci-local hook pre-push          what the git hook runs; reads the pushed refs on stdin
   ci-local status [-n 10] [--json]  recent runs
   ci-local logs [id] [-f]         a run's log (newest by default), -f follows it
   ci-local watch                  live terminal view
-  ci-local ui [--port 7777]       local web view of the same runs
-  ci-local init --image <path>    write a starter ci-local.yaml
+  ci-local ui [--port 7777]       local web view of the same runs, in this terminal
+  ci-local ui start|stop|restart|status|open|logs   keep the web view running in the background
+  ci-local ui install|uninstall   start it at login (macOS LaunchAgent)
+  ci-local init --image <path> [--build-env build.env]  write a starter ci-local.yaml
   ci-local install-hook [--kind husky|githooks|git] [--remove]
   ci-local doctor                 check tools, config and the hook
   ci-local config                 print the resolved configuration
@@ -37,7 +43,8 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["image", "sha", "profile", "platform", "n", "port", "kind"]);
+const VALUE_FLAGS = new Set(["image", "sha", "profile", "platform", "n", "port", "kind", "build-env"]);
+const CLI = fileURLToPath(import.meta.url);
 
 function parseArgs(argv: string[]): Args {
   const [cmd = "help", ...tail] = argv;
@@ -129,8 +136,37 @@ function parseJob(text: string): Job {
 
 const expandHome = (p: string): string => p.replace(/^~(?=\/|$)/, homedir());
 
+// A detached child owns the run, so closing the terminal cannot stop a long build.
+async function runInBackground(a: Args): Promise<number> {
+  if (a.flags.has("stdin")) throw new ConfigError(["--background cannot be combined with --stdin"]);
+  await repoRoot(process.cwd());
+  const failureLog = join(stateHome(), `background-${process.pid}.log`);
+  mkdirSync(stateHome(), { recursive: true });
+  const out = openSync(failureLog, "w");
+  const args = process.argv.slice(2).filter((x) => x !== "--background");
+  const child = Bun.spawn([process.execPath, CLI, ...args], { cwd: process.cwd(), stdin: "ignore", stdout: out, stderr: out, env: childEnv(), detached: true });
+  child.unref();
+  closeSync(out);
+  // The run record carries the child's pid, which identifies it even if another run starts at the same moment.
+  for (let waited = 0; waited < 8000; waited += 250) {
+    const run = listRuns(20).find((r) => r.pid === child.pid);
+    if (run) {
+      rmSync(failureLog, { force: true });
+      console.log(`started ${run.id}\nfollow it with: ci-local logs -f ${run.id}${readDaemon() ? "" : "   (or ci-local ui start)"}`);
+      return 0;
+    }
+    if (child.exitCode !== null) break;
+    await Bun.sleep(250);
+  }
+  const output = readFileSync(failureLog, "utf8").trim();
+  rmSync(failureLog, { force: true });
+  console.error(output || "the background run did not start");
+  return 1;
+}
+
 // :prod follows a hook run for the first configured branch, or an explicit --retag, never a casual manual run.
 async function cmdRun(a: Args): Promise<number> {
+  if (a.flags.has("background")) return runInBackground(a);
   let results: RunRecord[];
   if (a.flags.has("stdin")) {
     const job = parseJob(await readStdin());
@@ -139,7 +175,7 @@ async function cmdRun(a: Args): Promise<number> {
       sha: job.sha,
       images: job.images,
       profile: job.profile,
-      flags: { push: job.push, retag: job.retag, dry: job.dry_run, keepLocal: job.keep_local, platform: job.platform, echo: true },
+      flags: { push: job.push, retag: job.retag, dry: job.dry_run, keepLocal: job.keep_local, platform: job.platform, echo: true, trigger: "manual" },
     });
   } else {
     const image = flag(a, "image");
@@ -155,6 +191,7 @@ async function cmdRun(a: Args): Promise<number> {
         keepLocal: a.flags.has("keep-local"),
         platform: flag(a, "platform"),
         echo: true,
+        trigger: "manual",
       },
     });
   }
@@ -179,11 +216,14 @@ async function cmdHook(a: Args): Promise<number> {
     pushed = [guess];
   }
   const prodRef = `refs/heads/${config.branches[0]}`;
-  const bySha = new Map<string, boolean>();
-  for (const p of pushed) bySha.set(p.sha, (bySha.get(p.sha) ?? false) || p.ref === prodRef);
+  const bySha = new Map<string, { retag: boolean; ref: string }>();
+  for (const p of pushed) {
+    const seen = bySha.get(p.sha);
+    bySha.set(p.sha, { retag: (seen?.retag ?? false) || p.ref === prodRef, ref: seen?.ref ?? p.ref.replace(/^refs\/heads\//, "") });
+  }
   let failed = false;
-  for (const [sha, retag] of bySha) {
-    const results = await runAll({ cwd: root, sha, flags: { push: true, retag, dry: false, keepLocal: false, echo: true } });
+  for (const [sha, { retag, ref }] of bySha) {
+    const results = await runAll({ cwd: root, sha, flags: { push: true, retag, dry: false, keepLocal: false, echo: true, ref, trigger: "hook" } });
     if (results.some((r) => r.status === "failed")) failed = true;
   }
   if (failed) process.stderr.write("ci-local: image build failed, push stopped. Skip once with CI_LOCAL_SKIP_IMAGE=1 git push\n");
@@ -209,13 +249,73 @@ async function cmdLogs(a: Args): Promise<number> {
   if (!id || !readRun(id)) throw new ConfigError([id ? `no run '${id}'` : "no runs yet"]);
   let offset = 0;
   for (;;) {
-    const { text, next } = readLog(id, offset);
+    const { text, next, size } = readLog(id, offset);
     if (text) process.stdout.write(text);
     offset = next;
+    if (offset < size) continue;
     if (!a.flags.has("f") || readRun(id)?.status !== "running") break;
     await Bun.sleep(700);
   }
   return 0;
+}
+
+async function openUrl(url: string): Promise<void> {
+  await exec([process.platform === "darwin" ? "open" : "xdg-open", url]);
+}
+
+async function cmdUi(a: Args): Promise<number> {
+  const port = Number(flag(a, "port") ?? DEFAULT_PORT);
+  const where = (p: number): string => `http://127.0.0.1:${p}`;
+  switch (a.sub ?? "serve") {
+    case "serve": {
+      const server = startUi(port);
+      // Only an explicit `ui serve` (the background child, the login agent) registers; a terminal session must not displace it.
+      if (a.sub === "serve") registerDaemon(server.port as number);
+      console.log(`ci-local ui on ${where(server.port as number)}  (ctrl-c to stop)`);
+      return await new Promise<number>(() => {});
+    }
+    case "start": {
+      const info = await startDaemon(port);
+      console.log(`web view running on ${where(info.port)} (pid ${info.pid}); stop it with: ci-local ui stop`);
+      if (a.flags.has("open")) await openUrl(where(info.port));
+      return 0;
+    }
+    case "open": {
+      const info = await startDaemon(port);
+      await openUrl(where(info.port));
+      console.log(where(info.port));
+      return 0;
+    }
+    case "stop":
+      console.log((await stopDaemon()) ? "stopped" : "not running");
+      if (agentInstalled()) console.log("the login service is installed and will start it again; remove it with: ci-local ui uninstall");
+      return 0;
+    case "restart": {
+      await stopDaemon();
+      const info = await startDaemon(port);
+      console.log(`web view running on ${where(info.port)} (pid ${info.pid})`);
+      return 0;
+    }
+    case "status": {
+      const info = readDaemon();
+      console.log(info ? `running on ${where(info.port)} (pid ${info.pid}, since ${info.started})\nlog: ${uiLogFile()}` : "not running (start it with: ci-local ui start)");
+      return info ? 0 : 1;
+    }
+    case "logs": {
+      if (!existsSync(uiLogFile())) throw new ConfigError(["no web view log yet"]);
+      const tail = readFileSync(uiLogFile(), "utf8").split("\n").slice(-40).join("\n");
+      console.log(tail);
+      return 0;
+    }
+    case "install":
+      console.log(`installed ${await installAgent(port)}; the web view now starts at login on ${where(port)}`);
+      return 0;
+    case "uninstall":
+      console.log((await uninstallAgent()) ? "removed the login service" : "no login service installed");
+      return 0;
+    default:
+      throw new ConfigError([`unknown ui command '${a.sub}'; use serve, start, stop, restart, status, open, logs, install or uninstall`]);
+  }
 }
 
 async function cmdInit(a: Args): Promise<number> {
@@ -225,6 +325,11 @@ async function cmdInit(a: Args): Promise<number> {
   const image = flag(a, "image");
   if (!image) throw new ConfigError(["pass --image <registry path>, for example --image acme/web"]);
   const profile = flag(a, "profile");
+  const buildEnv = flag(a, "build-env");
+  if (buildEnv && (!isSafeRelative(buildEnv) || !/^[\w./-]+$/.test(buildEnv))) throw new ConfigError(["--build-env must be a plain path inside the repository (letters, digits, . _ - and /)"]);
+  const envLine = buildEnv
+    ? `    # Public values only (NEXT_PUBLIC_*, VITE_*), read from this machine and gitignored; ci-local refuses secrets.\n    # Template: ${buildEnv}.example\n    build_env_local: ${buildEnv}\n`
+    : "    # Public values only (NEXT_PUBLIC_*, VITE_*); ci-local refuses secrets. Use build_env_local for a gitignored file.\n    # build_env: build.env\n";
   await Bun.write(
     file,
     `version: 1
@@ -238,12 +343,26 @@ images:
     context: .
     # Files that cannot change the image, so edits there do not cause a rebuild.
     tag_exclude: [.github, docs, README.md]
-    # Public values only (NEXT_PUBLIC_*, VITE_*); ci-local refuses secrets. Uncomment if the build needs them.
-    # build_env: infra/build.env
-`,
+${envLine}`,
   );
   console.log(`wrote ${file}`);
+  if (buildEnv) await scaffoldBuildEnv(root, buildEnv);
   return 0;
+}
+
+// The example is committed and the real file is not, so a fresh clone knows what to fill in.
+async function scaffoldBuildEnv(root: string, rel: string): Promise<void> {
+  const example = join(root, `${rel}.example`);
+  if (!existsSync(example)) {
+    await Bun.write(example, `# Copy to ${rel} and fill in. Public values only: ci-local refuses secrets and keys without a public prefix.\nNEXT_PUBLIC_EXAMPLE=\n`);
+    console.log(`wrote ${example}`);
+  }
+  if ((await exec(["git", "-C", root, "check-ignore", "-q", "--", rel])).code !== 0) {
+    const ignore = join(root, ".gitignore");
+    const current = existsSync(ignore) ? readFileSync(ignore, "utf8") : "";
+    await Bun.write(ignore, `${current}${current === "" || current.endsWith("\n") ? "" : "\n"}${rel}\n`);
+    console.log(`added ${rel} to ${ignore}`);
+  }
 }
 
 async function cmdInstallHook(a: Args): Promise<number> {
@@ -316,6 +435,26 @@ async function cmdDoctor(): Promise<number> {
       }
     }
   }
+  for (const img of config?.images ?? []) {
+    const file = img.build_env_local;
+    if (!file) continue;
+    if (!existsSync(join(root, file))) {
+      line("fail", `${file} (${img.name}, build_env_local) does not exist on this machine`);
+      continue;
+    }
+    try {
+      const problems = guardBuildEnv(readExtractedFile(root, file), config?.public_prefixes ?? [], file);
+      line(problems.length ? "fail" : "ok", problems.length ? problems.join("\n      ") : `${file} holds only public values`);
+    } catch (e) {
+      line("fail", (e as Error).message);
+      continue;
+    }
+    const tracked = (await exec(["git", "-C", root, "ls-files", "--error-unmatch", "--", file])).code === 0;
+    const ignored = (await exec(["git", "-C", root, "check-ignore", "-q", "--", file])).code === 0;
+    if (!existsSync(join(root, `${file}.example`))) line("warn", `no ${file}.example, so a fresh clone cannot tell what to fill in`);
+    if (tracked) line("warn", `${file} is committed; use build_env instead of build_env_local`);
+    else if (!ignored) line("warn", `${file} is not gitignored, so it will show up in git status`);
+  }
   const target = await findHookTarget(root);
   if (!existsSync(target.file)) {
     line("fail", `no pre-push hook at ${target.file} (ci-local install-hook)`);
@@ -349,11 +488,7 @@ async function main(): Promise<number> {
     case "status": return cmdStatus(a);
     case "logs": return cmdLogs(a);
     case "watch": await watch(); return 0;
-    case "ui": {
-      const server = startUi(Number(flag(a, "port") ?? 7777));
-      console.log(`ci-local ui on http://127.0.0.1:${server.port}  (ctrl-c to stop)`);
-      return await new Promise<number>(() => {});
-    }
+    case "ui": return cmdUi(a);
     case "init": return cmdInit(a);
     case "install-hook": return cmdInstallHook(a);
     case "doctor": return cmdDoctor();

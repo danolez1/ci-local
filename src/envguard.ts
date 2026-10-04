@@ -3,7 +3,7 @@ const SECRET_VALUE = /sk_live_|rk_live_|sk-[A-Za-z0-9]{20,}|whsec_|FLWSECK|-----
 
 export function parseEnvLines(text: string): Array<{ key: string; value: string }> {
   const out: Array<{ key: string; value: string }> = [];
-  for (const raw of text.split("\n")) {
+  for (const raw of text.split(/\r\n|\r|\n/)) {
     const line = raw.trim();
     if (line === "" || line.startsWith("#")) continue;
     const eq = line.indexOf("=");

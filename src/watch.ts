@@ -1,7 +1,7 @@
 import { latestRunId, listRuns, readLog } from "./store.ts";
 import type { RunRecord } from "./types.ts";
 
-const COLOR: Record<string, string> = { success: "32", failed: "31", running: "34", skipped: "33", "dry-run": "33" };
+const COLOR: Record<string, string> = { success: "32", failed: "31", running: "34", skipped: "33", "dry-run": "33", interrupted: "31" };
 const paint = (code: string | undefined, text: string): string => `\x1b[${code ?? "0"}m${text}\x1b[0m`;
 
 function age(iso: string): string {
@@ -24,7 +24,8 @@ export async function watch(): Promise<void> {
     out.push(runs.length ? runs.map(row).join("\n") : "no runs yet");
     const id = latestRunId();
     if (id) {
-      const tail = readLog(id).text.trimEnd().split("\n").slice(-14);
+      const size = readLog(id, 0, 0).size;
+      const tail = readLog(id, Math.max(0, size - 16_384)).text.trimEnd().split("\n").slice(-14);
       out.push(`\n\n${paint("90", id)}`, ...tail);
     }
     process.stdout.write(`${out.join("\n")}\n`);

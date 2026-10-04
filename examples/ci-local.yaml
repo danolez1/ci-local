@@ -9,4 +9,4 @@ images:
     context: .
     tag_exclude: [.github, docs, README.md]
     # Public values only (NEXT_PUBLIC_*, VITE_*). ci-local refuses anything that looks like a secret.
-    # build_env: infra/build.env
+    # build_env: build.env

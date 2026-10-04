@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
 import { exec, must, setProxyMode } from "./exec.ts";
-import { archiveTo, committedFile, shortSha, treeHash } from "./git.ts";
-import { readExtractedFile, within } from "./paths.ts";
+import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
+import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { RunHandle } from "./store.ts";
 import type { ImageSpec, Profile, RunRecord } from "./types.ts";
@@ -18,6 +18,8 @@ export interface RunFlags {
   keepLocal: boolean;
   platform?: string;
   echo: boolean;
+  ref?: string;
+  trigger?: "hook" | "manual";
 }
 
 interface RunInput {
@@ -32,7 +34,7 @@ interface RunInput {
 
 export async function runImage(input: RunInput): Promise<RunRecord> {
   const { root, sha, spec, profile, flags } = input;
-  const run = RunHandle.create({ repo_path: root, image: spec.image, sha, profile: input.profileName, echo: flags.echo });
+  const run = RunHandle.create({ repo_path: root, image: spec.image, sha, profile: input.profileName, echo: flags.echo, ref: flags.ref, trigger: flags.trigger });
   setProxyMode(profile.proxy === "inherit");
   const platform = flags.platform ?? spec.platform ?? profile.platform ?? "linux/amd64";
   let registry: Registry | undefined;
@@ -60,11 +62,22 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
   try {
     run.say(`${spec.image} at ${shortSha(sha)} for ${platform}, profile ${input.profileName} (${profile.transport})`);
 
+    // Not in the commit, so its content has to reach the tag or a changed value would reuse an old image.
+    let localEnv: string | undefined;
+    if (spec.build_env_local) {
+      if (await isCommitted(root, sha, spec.build_env_local)) throw new Error(`${spec.build_env_local} is committed at ${shortSha(sha)}; a working-tree copy must not override it, use build_env instead`);
+      if (!existsSync(join(root, spec.build_env_local))) throw new Error(`${spec.build_env_local} (build_env_local) does not exist in ${root}`);
+      localEnv = readExtractedFile(root, spec.build_env_local);
+      const problems = guardBuildEnv(localEnv, input.publicPrefixes, spec.build_env_local);
+      if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
+    }
+    const localHash = localEnv === undefined ? "" : new Bun.CryptoHasher("sha256").update(localEnv).digest("hex").slice(0, 12);
+
     const tag = await run.phase("hash", async () => {
       const hash = await treeHash(root, sha, {
         include: spec.tag_include,
         exclude: spec.tag_exclude,
-        salt: `${platform}|${spec.dockerfile}|${spec.context}`,
+        salt: `${platform}|${spec.dockerfile}|${spec.context}|${localHash}`,
       });
       return `sha-${hash}`;
     });
@@ -94,6 +107,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
 
     if (registry && (await registry.exists(spec.image, tag))) {
       run.say(`${tag} is already in the registry, build skipped`);
+      run.set({ pushed: true });
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
       run.finish("skipped");
       run.say(`deploy image: ${pullRef}`);
@@ -103,12 +117,15 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
     workDir = mkdtempSync(join(tmpdir(), "ci-local-"));
     const ctx = join(workDir, "ctx");
     mkdirSync(ctx);
-    await run.phase("extract", () => archiveTo(root, sha, ctx));
+    await run.phase("extract", async () => {
+      await archiveTo(root, sha, ctx);
+      if (spec.build_env_local && localEnv !== undefined) placeFile(ctx, spec.build_env_local, localEnv);
+    });
 
     localTag = `ci-local/${spec.image}:${tag}`;
     await run.phase("build", async () => {
       // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
-      for (const file of [spec.build_env, spec.build_args_file]) {
+      for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
         if (!file) continue;
         const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file);
         if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
@@ -141,6 +158,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       await run.phase("push", async () => {
         await registry!.push(tarball, spec.image, tag);
       });
+      run.set({ pushed: true });
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
       run.say(`deploy image: ${pullRef}`);
     }

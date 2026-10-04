@@ -48,6 +48,7 @@ A repo can define its own `profiles:` in `ci-local.yaml`; they win over global o
 
 ```sh
 ci-local init --image acme/web      # writes ci-local.yaml
+ci-local init --image acme/web --build-env build.env   # also the .example template and the .gitignore line
 ci-local install-hook               # adds the pre-push step
 ci-local doctor                     # checks tools, config and the hook
 ```
@@ -65,13 +66,14 @@ images:
     dockerfile: Dockerfile
     context: .
     platform: linux/amd64       # default; match the server's architecture
-    build_env: infra/build.env  # committed, public values only
-    build_args_file: infra/args.env   # committed KEY=VALUE lines passed as --build-arg
+    build_env: build.env        # committed, public values only
+    # build_env_local: build.env  # instead of build_env, to keep the file gitignored (never both)
+    build_args_file: args.env       # committed KEY=VALUE lines passed as --build-arg
     tag_exclude: [docs, README.md]    # paths that cannot change the image
     tag_include: []             # if set, only these paths decide the tag
 ```
 
-Paths (`dockerfile`, `context`, `build_env`, `build_args_file`) must be relative and stay inside the repo, and the two env files must be regular files, not symlinks. Top-level `dockerfile`, `context`, `tag_exclude` and `tag_include` are defaults for every image, so a monorepo lists several entries under `images`. `ci-local config` prints the resolved result.
+`build_env_local` is for values you would rather not commit: the file is read from your working tree, checked like `build_env`, copied into the build context at the same path, and hashed into the tag so a changed value never reuses an old image. Use one of `build_env` or `build_env_local` per file. Commit a `<file>.example` template next to it; `init --build-env` creates it and adds the real file to `.gitignore`, and `doctor` warns when the template is missing. Paths (`dockerfile`, `context`, `build_env`, `build_env_local`, `build_args_file`) must be relative and stay inside the repo, and the env files must be regular files, not symlinks. Top-level `dockerfile`, `context`, `tag_exclude` and `tag_include` are defaults for every image, so a monorepo lists several entries under `images`. `ci-local config` prints the resolved result.
 
 ## The hook
 
@@ -106,22 +108,26 @@ The stdin job is YAML or JSON with `repo` (a leading `~` works), `sha`, `images`
 
 ## Watching runs
 
-Each run writes a record and a log under `~/.local/state/ci-local/runs/` (`$CI_LOCAL_STATE_DIR` moves it).
+Each run writes a record (`run.json`) and a log under `~/.local/state/ci-local/runs/` (`$CI_LOCAL_STATE_DIR` moves it). The record has the image, sha, branch, tag, trigger (`hook` or `manual`), status, per-phase timings, the deploy image once it is published, and the pid of the process running it. A run whose process was killed shows as `interrupted`. The log marks each phase as a group, which the web view folds.
 
 ```sh
-ci-local status          # recent runs
-ci-local logs -f         # follow the newest log
-ci-local watch           # live terminal view
-ci-local ui --port 7777  # web view on http://127.0.0.1:7777
+ci-local status                  # recent runs
+ci-local logs -f                 # follow the newest log
+ci-local watch                   # live terminal view
+ci-local ui                      # web view in this terminal, http://127.0.0.1:7777
+ci-local ui start --open         # run the web view in the background and open it
+ci-local ui status | stop | restart | logs
+ci-local ui install              # start it at login (macOS LaunchAgent); ui uninstall removes it
+ci-local run --background        # build detached from the terminal; prints the run id to follow
 ```
 
-The web view is read-only and binds to loopback, because logs can name internal hosts.
+The web view has paged, filterable run lists (status, repository, search), a run page with phases and a filterable log, a repositories page with success rate and median build time, light, dark and system themes, and keyboard shortcuts (`?` lists them). It is read-only and binds to loopback, because logs can name internal hosts. `--port` picks another port; the background copy remembers its port in `ui.json` in the state directory.
 
 ## What gets built and tagged
 
 - The image is built from `git archive <sha>`, the files a clone would see. Untracked and ignored files never reach it, so a build that depends on a local-only file fails on your machine first.
 - The tag is `sha-` plus a hash of the committed files that can change the image (everything minus `tag_exclude`, or only `tag_include`), the platform and the Dockerfile path. A commit that changes nothing relevant finds its tag already in the registry and skips the build.
-- `build_env` and `build_args_file` may only hold public values. Every key needs a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_` by default), and values matching common credential formats (Stripe, GitHub, Slack and AWS keys, private key blocks, JWTs, `sk-` keys) are refused. That is a pattern check, not proof a value is safe. Secrets stay in the deploy platform's environment.
+- `build_env`, `build_env_local` and `build_args_file` may only hold public values. Every key needs a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_` by default), and values matching common credential formats (Stripe, GitHub, Slack and AWS keys, private key blocks, JWTs, `sk-` keys) are refused. That is a pattern check, not proof a value is safe. Secrets stay in the deploy platform's environment.
 
 ## Deploying
 

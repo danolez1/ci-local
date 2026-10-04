@@ -25,6 +25,7 @@ export interface ImageSpec {
   build_args_file?: string;
   /** Checked but never passed: the Dockerfile reads this file itself. */
   build_env?: string;
+  build_env_local?: string;
   tag_include: string[];
   tag_exclude: string[];
 }
@@ -38,7 +39,7 @@ export interface RepoConfig {
   images: ImageSpec[];
 }
 
-export type RunStatus = "running" | "success" | "skipped" | "failed" | "dry-run";
+export type RunStatus = "running" | "success" | "skipped" | "failed" | "dry-run" | "interrupted";
 
 export interface PhaseRecord {
   name: string;
@@ -61,4 +62,9 @@ export interface RunRecord {
   phases: PhaseRecord[];
   error?: string;
   pull_ref?: string;
+  /** True once the image is in the registry, so a local --no-push run never shows a deploy image. */
+  pushed?: boolean;
+  pid?: number;
+  ref?: string;
+  trigger?: "hook" | "manual";
 }

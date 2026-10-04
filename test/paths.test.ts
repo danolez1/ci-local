@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseRepoConfig } from "../src/config.ts";
 import { must } from "../src/exec.ts";
 import { committedFile } from "../src/git.ts";
-import { isSafeRelative, readExtractedFile, within } from "../src/paths.ts";
+import { isSafeRelative, placeFile, readExtractedFile, within } from "../src/paths.ts";
 
 let base = "";
 let repo = "";
@@ -45,7 +45,7 @@ test("a symlink out of the extracted tree is refused", () => {
   expect(within(repo, "public.env")).toContain("public.env");
   expect(() => within(repo, "linked.env")).toThrow(/outside the repository/);
   expect(() => within(repo, "up")).toThrow(/outside the repository/);
-  expect(() => within(repo, "missing.env")).toThrow(/not in the commit/);
+  expect(() => within(repo, "missing.env")).toThrow(/does not exist/);
 });
 
 test("a committed symlink cannot stand in for an env file", async () => {
@@ -72,5 +72,24 @@ test("a file swapped for a symlink during extraction is refused", () => {
   expect(readExtractedFile(ctx, "build.env")).toContain("NEXT_PUBLIC_A");
   rmSync(join(ctx, "build.env"));
   symlinkSync(join(ctx, "secret.txt"), join(ctx, "build.env"));
-  expect(() => readExtractedFile(ctx, "build.env")).toThrow(/regular file after extraction/);
+  expect(() => readExtractedFile(ctx, "build.env")).toThrow(/regular file/);
+});
+
+test("placing a local file replaces a committed symlink instead of writing through it", () => {
+  const ctx = mkdtempSync(join(base, "place-"));
+  mkdirSync(join(ctx, "infra"));
+  writeFileSync(join(base, "victim.txt"), "keep me\n");
+  symlinkSync(join(base, "victim.txt"), join(ctx, "infra", "build.env"));
+  placeFile(ctx, "infra/build.env", "NEXT_PUBLIC_A=1\n");
+  expect(lstatSync(join(ctx, "infra", "build.env")).isSymbolicLink()).toBe(false);
+  expect(readFileSync(join(ctx, "infra", "build.env"), "utf8")).toBe("NEXT_PUBLIC_A=1\n");
+  expect(readFileSync(join(base, "victim.txt"), "utf8")).toBe("keep me\n");
+});
+
+test("placing a local file never writes through a symlinked directory", () => {
+  const ctx = mkdtempSync(join(base, "dirlink-"));
+  const outside = mkdtempSync(join(base, "outside-"));
+  symlinkSync(outside, join(ctx, "infra"));
+  expect(() => placeFile(ctx, "infra/build.env", "NEXT_PUBLIC_A=1\n")).toThrow(/not a plain directory/);
+  expect(existsSync(join(outside, "build.env"))).toBe(false);
 });

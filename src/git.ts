@@ -35,6 +35,10 @@ export async function treeHash(root: string, sha: string, opts: { include: strin
   return hasher.digest("hex").slice(0, 12);
 }
 
+export async function isCommitted(root: string, sha: string, path: string): Promise<boolean> {
+  return (await must(["git", "-C", root, "ls-tree", sha, "--", path])).trim() !== "";
+}
+
 // A symlink is refused because the build would follow it past what the guard checked.
 export async function committedFile(root: string, sha: string, path: string): Promise<string> {
   const entries = (await must(["git", "-C", root, "ls-tree", "-z", sha, "--", path])).split("\0").filter(Boolean);

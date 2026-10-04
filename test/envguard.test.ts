@@ -26,3 +26,7 @@ test("rejects a JWT and an sk- style key", () => {
   const key = `sk-${"a".repeat(24)}`;
   expect(guardBuildEnv(`NEXT_PUBLIC_B=${key}\n`, prefixes, "b.env")[0]).toContain("looks like a secret");
 });
+
+test("a bare carriage return does not hide a second assignment", () => {
+  expect(guardBuildEnv("NEXT_PUBLIC_A=1\rAWS_VALUE=abc\r", prefixes, "b.env")[0]).toContain("'AWS_VALUE'");
+});

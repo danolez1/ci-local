@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { exec, must } from "../src/exec.ts";
@@ -106,3 +106,53 @@ test("install-hook refuses a hook that is not a shell script", async () => {
   expect(r.code).toBe(1);
   expect(r.err).toContain("not a shell script");
 });
+
+test("build_env_local comes from the working tree and its content changes the tag", async () => {
+  mkdirSync(join(repo, "infra"), { recursive: true });
+  writeFileSync(join(repo, ".gitignore"), "infra/local.env\n");
+  writeFileSync(join(repo, "ci-local.yaml"), "version: 1\nimages:\n  - image: acme/app\n    build_env_local: infra/local.env\n");
+  await must(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "add", "-A"]);
+  await must(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "local env"]);
+  const tagOf = async () => (await run(["run", "--dry-run"])).err.match(/sha-[0-9a-f]{12}/)?.[0];
+
+  const missing = await run(["run", "--dry-run"]);
+  expect(missing.code).toBe(1);
+  expect(missing.err).toContain("does not exist");
+
+  writeFileSync(join(repo, "infra", "local.env"), "NEXT_PUBLIC_A=one\n");
+  const first = await tagOf();
+  writeFileSync(join(repo, "infra", "local.env"), "NEXT_PUBLIC_A=two\n");
+  const second = await tagOf();
+  expect(first).toBeDefined();
+  expect(second).toBeDefined();
+  expect(second).not.toBe(first);
+
+  writeFileSync(join(repo, "infra", "local.env"), `NEXT_PUBLIC_A=${["sk", "live", "z"].join("_")}\n`);
+  const secret = await run(["run", "--dry-run"]);
+  expect(secret.code).toBe(1);
+  expect(secret.err).toContain("looks like a secret");
+}, 60000);
+
+test("init --build-env writes the example, ignores the real file and points the config at it", async () => {
+  const fresh = mkdtempSync(join(base, "init-"));
+  await must(["git", "-C", fresh, "init", "-q", "-b", "main"]);
+  const r = await exec([cli, "init", "--image", "acme/web", "--build-env", "infra/build.env"], { cwd: fresh, env });
+  expect(r.code).toBe(0);
+  expect(readFileSync(join(fresh, "ci-local.yaml"), "utf8")).toContain("build_env_local: infra/build.env");
+  expect(readFileSync(join(fresh, "infra", "build.env.example"), "utf8")).toContain("NEXT_PUBLIC_EXAMPLE=");
+  expect(readFileSync(join(fresh, ".gitignore"), "utf8")).toContain("infra/build.env");
+  expect((await exec(["git", "-C", fresh, "check-ignore", "-q", "infra/build.env"])).code).toBe(0);
+}, 60000);
+
+test("build_env_local refuses a file that is committed or listed twice", async () => {
+  writeFileSync(join(repo, "ci-local.yaml"), "version: 1\nimages:\n  - image: acme/app\n    build_env: infra/local.env\n    build_env_local: infra/local.env\n");
+  const twice = await run(["run", "--dry-run"]);
+  expect(twice.code).toBe(2);
+  expect(twice.err).toContain("different file");
+
+  writeFileSync(join(repo, "ci-local.yaml"), "version: 1\nimages:\n  - image: acme/app\n    build_env_local: Dockerfile\n");
+  await must(["git", "-C", repo, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qam", "points at a tracked file"]);
+  const tracked = await run(["run", "--dry-run"]);
+  expect(tracked.code).toBe(1);
+  expect(tracked.err).toContain("is committed");
+}, 60000);
