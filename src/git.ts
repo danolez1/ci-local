@@ -35,9 +35,16 @@ export async function treeHash(root: string, sha: string, opts: { include: strin
   return hasher.digest("hex").slice(0, 12);
 }
 
-export async function readBlob(root: string, sha: string, path: string): Promise<string | null> {
-  const r = await exec(["git", "-C", root, "show", `${sha}:${path}`]);
-  return r.code === 0 ? r.out : null;
+// A symlink is refused because the build would follow it past what the guard checked.
+export async function committedFile(root: string, sha: string, path: string): Promise<string> {
+  const entries = (await must(["git", "-C", root, "ls-tree", "-z", sha, "--", path])).split("\0").filter(Boolean);
+  if (entries.length === 0) throw new Error(`${path} is not committed at ${shortSha(sha)}`);
+  const entry = entries[0] as string;
+  const name = entry.slice(entry.indexOf("\t") + 1);
+  if (entries.length !== 1 || name !== path || !/^100(644|755) /.test(entry)) {
+    throw new Error(`${path} must be a single regular file, not a directory, symlink or submodule`);
+  }
+  return await must(["git", "-C", root, "show", `${sha}:${path}`]);
 }
 
 // Extracting the archive, not copying the tree, keeps untracked and ignored files out of the build.

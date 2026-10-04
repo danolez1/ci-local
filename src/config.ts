@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { isSafeRelative } from "./paths.ts";
 import type { GlobalConfig, ImageSpec, Profile, RepoConfig, Transport } from "./types.ts";
 
 export class ConfigError extends Error {
@@ -27,6 +28,15 @@ function str(v: unknown, where: string, problems: string[], required = false): s
     return undefined;
   }
   return v;
+}
+
+function relPath(v: unknown, where: string, problems: string[]): string | undefined {
+  const value = str(v, where, problems);
+  if (value !== undefined && !isSafeRelative(value)) {
+    problems.push(`${where} must be a path inside the repository (no leading /, no ..)`);
+    return undefined;
+  }
+  return value;
 }
 
 function strList(v: unknown, where: string, problems: string[]): string[] {
@@ -94,8 +104,8 @@ export function parseRepoConfig(text: string): RepoConfig {
   if (raw.version !== 1) problems.push("version must be 1");
 
   const defaults = {
-    dockerfile: str(raw.dockerfile, "dockerfile", problems) ?? "Dockerfile",
-    context: str(raw.context, "context", problems) ?? ".",
+    dockerfile: relPath(raw.dockerfile, "dockerfile", problems) ?? "Dockerfile",
+    context: relPath(raw.context, "context", problems) ?? ".",
     tag_exclude: strList(raw.tag_exclude, "tag_exclude", problems),
     tag_include: strList(raw.tag_include, "tag_include", problems),
   };
@@ -119,11 +129,11 @@ export function parseRepoConfig(text: string): RepoConfig {
       images.push({
         name,
         image,
-        dockerfile: str(item.dockerfile, `${where}.dockerfile`, problems) ?? defaults.dockerfile,
-        context: str(item.context, `${where}.context`, problems) ?? defaults.context,
+        dockerfile: relPath(item.dockerfile, `${where}.dockerfile`, problems) ?? defaults.dockerfile,
+        context: relPath(item.context, `${where}.context`, problems) ?? defaults.context,
         platform: str(item.platform, `${where}.platform`, problems),
-        build_args_file: str(item.build_args_file, `${where}.build_args_file`, problems),
-        build_env: str(item.build_env, `${where}.build_env`, problems),
+        build_args_file: relPath(item.build_args_file, `${where}.build_args_file`, problems),
+        build_env: relPath(item.build_env, `${where}.build_env`, problems),
         tag_include: item.tag_include === undefined ? defaults.tag_include : strList(item.tag_include, `${where}.tag_include`, problems),
         tag_exclude: item.tag_exclude === undefined ? defaults.tag_exclude : strList(item.tag_exclude, `${where}.tag_exclude`, problems),
       });

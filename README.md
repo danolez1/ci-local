@@ -69,7 +69,7 @@ images:
     tag_include: []             # if set, only these paths decide the tag
 ```
 
-Top-level `dockerfile`, `context`, `tag_exclude` and `tag_include` are defaults for every image, so a monorepo lists several entries under `images`. `ci-local config` prints the resolved result.
+Paths (`dockerfile`, `context`, `build_env`, `build_args_file`) must be relative and stay inside the repo, and the two env files must be regular files, not symlinks. Top-level `dockerfile`, `context`, `tag_exclude` and `tag_include` are defaults for every image, so a monorepo lists several entries under `images`. `ci-local config` prints the resolved result.
 
 ## The hook
 

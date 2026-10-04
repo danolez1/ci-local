@@ -5,7 +5,7 @@ import { ConfigError, loadGlobalConfig, loadRepoConfig, resolveProfile } from ".
 import { runImage, type RunFlags } from "./engine.ts";
 import { guardBuildEnv } from "./envguard.ts";
 import { exec, has } from "./exec.ts";
-import { checkedOutRef, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
+import { checkedOutRef, committedFile, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
 import { findEarlyExit, findHookTarget, installHook, isInstalled, isLastStep, isShellHook, uninstallHook, type HookKind } from "./hooks.ts";
 import { latestRunId, listRuns, readLog, readRun, stateHome } from "./store.ts";
 import type { RepoConfig, RunRecord } from "./types.ts";
@@ -299,13 +299,12 @@ async function cmdDoctor(): Promise<number> {
     for (const img of config.images) {
       for (const file of [img.build_env, img.build_args_file]) {
         if (!file) continue;
-        const path = join(root, file);
-        if (!existsSync(path)) {
-          line("fail", `${file} (${img.name}) is missing`);
-          continue;
+        try {
+          const problems = guardBuildEnv(await committedFile(root, "HEAD", file), config.public_prefixes, file);
+          line(problems.length ? "fail" : "ok", problems.length ? problems.join("\n      ") : `${file} holds only public values`);
+        } catch (e) {
+          line("fail", `${file} (${img.name}): ${(e as Error).message}`);
         }
-        const problems = guardBuildEnv(readFileSync(path, "utf8"), config.public_prefixes, file);
-        line(problems.length ? "fail" : "ok", problems.length ? problems.join("\n      ") : `${file} holds only public values`);
       }
     }
   }

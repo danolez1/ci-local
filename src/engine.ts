@@ -3,7 +3,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { exec, must } from "./exec.ts";
-import { archiveTo, readBlob, shortSha, treeHash } from "./git.ts";
+import { archiveTo, committedFile, shortSha, treeHash } from "./git.ts";
+import { readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { RunHandle } from "./store.ts";
 import type { ImageSpec, Profile, RunRecord } from "./types.ts";
@@ -72,9 +73,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       const problems: string[] = [];
       for (const file of [spec.build_env, spec.build_args_file]) {
         if (!file) continue;
-        const text = await readBlob(root, sha, file);
-        if (text === null) throw new Error(`${file} is not committed at ${shortSha(sha)}`);
-        problems.push(...guardBuildEnv(text, input.publicPrefixes, file));
+        problems.push(...guardBuildEnv(await committedFile(root, sha, file), input.publicPrefixes, file));
       }
       if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
     });
@@ -106,22 +105,26 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
 
     localTag = `ci-local/${spec.image}:${tag}`;
     await run.phase("build", async () => {
+      // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
+      for (const file of [spec.build_env, spec.build_args_file]) {
+        if (!file) continue;
+        const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file);
+        if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
+      }
       const buildArgs: string[] = [];
       if (spec.build_args_file) {
-        for (const { key, value } of parseEnvLines(await Bun.file(join(ctx, spec.build_args_file)).text())) {
-          buildArgs.push("--build-arg", `${key}=${value}`);
-        }
+        for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
       }
       const r = await exec(
         [
           "docker", "buildx", "build",
           "--platform", platform,
           "--provenance=false", "--sbom=false", "--progress=plain",
-          "-f", join(ctx, spec.dockerfile),
+          "-f", within(ctx, spec.dockerfile),
           ...buildArgs,
           "-t", localTag as string,
           "--load",
-          join(ctx, spec.context),
+          within(ctx, spec.context),
         ],
         { onLine },
       );
