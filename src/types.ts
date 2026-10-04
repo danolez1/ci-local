@@ -48,6 +48,15 @@ export interface PhaseRecord {
   ended?: string;
 }
 
+export interface PushProgress {
+  /** Bytes uploaded so far; absent when the transport cannot be counted. */
+  sent?: number;
+  /** Bytes per second over the last few seconds. */
+  rate?: number;
+  blobs_done: number;
+  blobs_total: number;
+}
+
 export interface RunRecord {
   id: string;
   repo: string;
@@ -64,6 +73,7 @@ export interface RunRecord {
   pull_ref?: string;
   /** True once the image is in the registry, so a local --no-push run never shows a deploy image. */
   pushed?: boolean;
+  push?: PushProgress;
   pid?: number;
   ref?: string;
   trigger?: "hook" | "manual";

@@ -36,8 +36,8 @@ esac`);
 case "$1" in
   manifest) [ -f "${base}/exists" ] && exit 0; exit 1 ;;
   push)
-    [ -f "${base}/fail-push-always" ] && { echo "connection reset" >&2; exit 1; }
-    [ -f "${base}/fail-push-once" ] && { rm "${base}/fail-push-once"; echo "use of closed network connection" >&2; exit 1; }
+    [ -f "${base}/fail-push-always" ] && { echo "Error: connection reset" >&2; exit 1; }
+    [ -f "${base}/fail-push-once" ] && { rm "${base}/fail-push-once"; echo "Error: use of closed network connection" >&2; exit 1; }
     exit 0 ;;
   *) exit 0 ;;
 esac`);
@@ -140,6 +140,7 @@ test("an upload that keeps failing stops the push after three attempts and says 
   const r = await push();
   rmSync(join(base, "fail-push-always"));
   expect(r.code).not.toBe(0);
+  expect(r.err).toContain("Error: connection reset");
   expect(r.err).toContain("after 3 attempts");
   expect(log().match(/^crane push /gm)?.length).toBe(3);
   expect((await must(["git", "-C", remote, "rev-parse", "main"])).trim()).toBe(before);

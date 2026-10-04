@@ -91,7 +91,7 @@ export class RunHandle {
     }
   }
 
-  set(patch: Partial<Pick<RunRecord, "tag" | "pull_ref" | "pushed">>): void {
+  set(patch: Partial<Pick<RunRecord, "tag" | "pull_ref" | "pushed" | "push">>): void {
     Object.assign(this.record, patch);
     this.save();
   }

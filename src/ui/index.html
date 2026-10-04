@@ -140,6 +140,10 @@
   .run-grid { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 24px; align-items: start; }
   @media (max-width: 860px) { .run-grid { grid-template-columns: 1fr; } }
   .steps a { display: flex; gap: 8px; align-items: center; padding: 8px 12px; color: var(--fg); border-radius: 6px; }
+  .pushbox { padding: 12px; display: grid; gap: 8px; }
+  .bar { height: 8px; border-radius: 4px; background: var(--inset); overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: var(--success); transition: width .4s; }
+  .pushbox .nums { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; color: var(--muted); font-size: 12px; }
   .steps a:hover { background: var(--subtle); text-decoration: none; } .steps a .t { margin-left: auto; color: var(--muted); font-size: 12px; }
   .log { background: var(--code-bg); color: var(--code-fg); border-radius: 6px; border: 1px solid var(--border); overflow: hidden; }
   .logbar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--subtle); border-bottom: 1px solid var(--border); flex-wrap: wrap; color: var(--fg); }
@@ -439,7 +443,7 @@ function buildRunShell() {
   $("#view").innerHTML = `<div class="run-head"><div id="rIcon"></div><div><h1 id="rTitle"></h1><div class="meta" id="rMeta"></div></div></div>
     <div id="rErr"></div>
     <div class="run-grid"><div><div class="box"><div class="box-head"><strong>Phases</strong></div><div class="steps" id="rSteps" style="padding:8px"></div></div>
-      <div id="rDeploy" style="margin-top:16px"></div></div>
+      <div id="rPush" style="margin-top:16px"></div><div id="rDeploy" style="margin-top:16px"></div></div>
       <div class="log ${settings.wrap ? "wrap" : ""}" id="logBox"><div class="logbar">
         <input type="search" id="lf" placeholder="Filter log lines"><span id="lc" style="color:var(--muted);font-size:12px"></span><div class="grow"></div>
         <label><input type="checkbox" id="lw" ${settings.wrap ? "checked" : ""}> Wrap</label>
@@ -455,6 +459,18 @@ function buildRunShell() {
   cur.rendered = true;
 }
 
+function fmtBytes(n) { return n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round(n / 1e3) + " KB"; }
+
+function pushBox(r) {
+  const p = r.push;
+  const pct = p.blobs_total ? Math.min(100, Math.round((p.blobs_done / p.blobs_total) * 100)) : 0;
+  const live = r.status === "running";
+  const sent = p.sent === undefined ? "" : `<span>${fmtBytes(p.sent)} sent</span>`;
+  const rate = live && p.rate ? `<span>${fmtBytes(p.rate)}/s</span>` : "";
+  return `<div class="box"><div class="box-head"><strong>Push</strong></div><div class="pushbox"><div class="bar"><i style="width:${pct}%"></i></div>
+    <div class="nums"><span>${p.blobs_done} of ${p.blobs_total} layers</span>${sent}${rate}</div></div></div>`;
+}
+
 function updateRunShell() {
   const r = cur.run;
   $("#rIcon").innerHTML = icon(r.status, 32);
@@ -464,6 +480,7 @@ function updateRunShell() {
   $("#rErr").innerHTML = r.error ? `<div class="banner">${esc(r.error)}</div>` : "";
   $("#rSteps").innerHTML = r.phases.length ? r.phases.map((p, i) => `<a href="#" data-step="${i}">${icon(p.status === "running" ? "running" : p.status === "failed" ? "failed" : "done", 16)}<span>${esc(p.name)}</span><span class="t">${dur(p.started, p.ended)}</span></a>`).join("") : '<div class="empty" style="padding:12px">No phases yet</div>';
   $$("#rSteps a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); const g = cur.groups[+a.dataset.step]; if (g) g.scrollIntoView({ block: "start" }); }));
+  $("#rPush").innerHTML = r.push ? pushBox(r) : "";
   $("#rDeploy").innerHTML = r.pull_ref && r.pushed ? `<div class="box"><div class="box-head"><strong>Deploy image</strong></div><div style="padding:12px;display:grid;gap:8px"><code style="word-break:break-all">${esc(r.pull_ref)}</code><button class="copy" data-copy="${esc(r.pull_ref)}" style="width:max-content">Copy</button></div></div>` : "";
   cur.groups.forEach((el, i) => { const ph = r.phases[i]; if (ph) el.querySelector(".t").textContent = dur(ph.started, ph.ended); });
 }

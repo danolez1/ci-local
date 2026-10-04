@@ -2,11 +2,13 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { childEnv, exec, has, must } from "./exec.ts";
+import { type CountingProxy, countingProxy } from "./proxy.ts";
+import { blobCount, type PushHooks, trackPush } from "./progress.ts";
 import type { Profile } from "./types.ts";
 
 export interface Registry {
   exists(repo: string, tag: string): Promise<boolean>;
-  push(tarball: string, repo: string, tag: string): Promise<void>;
+  push(tarball: string, repo: string, tag: string, hooks?: PushHooks): Promise<void>;
   tag(repo: string, from: string, to: string): Promise<void>;
   close(): Promise<void>;
 }
@@ -18,6 +20,8 @@ const PUSH_ATTEMPTS = 3;
 
 interface Link {
   address(): string;
+  /** Bytes uploaded through this link, when it can count them. */
+  sent?(): number;
   /** Brings a dead transport back before the next attempt. */
   recover(): Promise<void>;
   /** What is known about why the transport failed, for the final error. */
@@ -31,15 +35,17 @@ function make(profile: Profile, link: Link): Registry {
     async exists(repo, tag) {
       return (await exec(["crane", "manifest", ...flags, `${link.address()}/${repo}:${tag}`])).code === 0;
     },
-    async push(tarball, repo, tag) {
+    async push(tarball, repo, tag, hooks = {}) {
+      const expected = await blobCount(tarball);
       for (let attempt = 1; ; attempt++) {
-        try {
-          await must(["crane", "push", ...flags, tarball, `${link.address()}/${repo}:${tag}`]);
-          return;
-        } catch (e) {
-          if (attempt >= PUSH_ATTEMPTS) throw new Error(`${e instanceof Error ? e.message : String(e)}${await link.explain()} (after ${attempt} attempts)`);
-          await link.recover();
-        }
+        const tracker = trackPush(hooks, link.sent, expected);
+        // -v is the only way crane reports which layer it is on; its output is parsed, not logged.
+        const r = await exec(["crane", "push", "-v", ...flags, tarball, `${link.address()}/${repo}:${tag}`], { onLine: tracker.line }).finally(tracker.stop);
+        if (r.code === 0) return;
+        const reason = tracker.error() || `crane push exited ${r.code}`;
+        if (attempt >= PUSH_ATTEMPTS) throw new Error(`${reason}${await link.explain()} (after ${attempt} attempts)`);
+        hooks.onLine?.(`push: attempt ${attempt} failed (${reason}), retrying`);
+        await link.recover();
       }
     },
     async tag(repo, from, to) {
@@ -108,9 +114,18 @@ async function openTunnel(profile: Profile): Promise<Registry> {
     rmSync(dir, { recursive: true, force: true });
     throw e;
   }
+  let proxy: CountingProxy;
+  try {
+    proxy = await countingProxy(() => current.port);
+  } catch (e) {
+    await stop();
+    rmSync(dir, { recursive: true, force: true });
+    throw e;
+  }
 
   return make({ ...profile, insecure: true }, {
-    address: () => `127.0.0.1:${current.port}`,
+    address: () => `127.0.0.1:${proxy.port}`,
+    sent: () => proxy.sent(),
     async recover() {
       if (current.proc.exitCode === null && (await exec(["ssh", "-S", sock, "-O", "check", "--", host])).code === 0) return;
       await stop();
@@ -121,6 +136,7 @@ async function openTunnel(profile: Profile): Promise<Registry> {
       return `; the ssh tunnel to ${host} had exited with code ${current.proc.exitCode}: ${(await current.stderr).trim() || "no output"}`;
     },
     async close() {
+      await proxy.close();
       await stop();
       rmSync(dir, { recursive: true, force: true });
     },

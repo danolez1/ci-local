@@ -156,7 +156,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
         await must(["docker", "save", "-o", tarball, localTag as string]);
       });
       await run.phase("push", async () => {
-        await registry!.push(tarball, spec.image, tag);
+        await registry!.push(tarball, spec.image, tag, { onLine, onProgress: (push) => run.set({ push }) });
       });
       run.set({ pushed: true });
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
