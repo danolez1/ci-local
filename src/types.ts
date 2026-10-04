@@ -8,6 +8,7 @@ export interface Profile {
   insecure?: boolean;
   pull_registry?: string;
   platform?: string;
+  proxy?: "none" | "inherit";
 }
 
 export interface GlobalConfig {

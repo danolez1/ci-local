@@ -12,6 +12,12 @@ interface ExecResult {
   err: string;
 }
 
+// Runs are sequential and use one profile at a time, so a module-level switch is enough.
+let inheritProxy = false;
+export function setProxyMode(inherit: boolean): void {
+  inheritProxy = inherit;
+}
+
 async function pump(stream: ReadableStream<Uint8Array>, onLine?: (line: string) => void): Promise<string> {
   const decoder = new TextDecoder();
   const reader = stream.getReader();
@@ -36,7 +42,7 @@ async function pump(stream: ReadableStream<Uint8Array>, onLine?: (line: string) 
 export async function exec(cmd: string[], options: ExecOptions = {}): Promise<ExecResult> {
   const proc = Bun.spawn(cmd, {
     cwd: options.cwd,
-    env: { ...process.env, ...options.env },
+    env: { ...childEnv(), ...options.env },
     stdin: options.stdin === undefined ? "ignore" : new Response(options.stdin),
     stdout: "pipe",
     stderr: "pipe",
@@ -56,6 +62,18 @@ export async function must(cmd: string[], options: ExecOptions = {}): Promise<st
     throw new Error(`${cmd.slice(0, 3).join(" ")} exited ${r.code}${detail ? `: ${detail}` : ""}`);
   }
   return r.out;
+}
+
+/** Environment for any child process, including ones spawned outside exec(). */
+export function childEnv(): Record<string, string | undefined> {
+  return inheritProxy ? { ...process.env } : withoutProxy(process.env);
+}
+
+const PROXY_VARS = /^(https?|all|no)_proxy$/i;
+
+// A stale proxy in the shell would otherwise reach docker, crane and ssh without anyone noticing.
+export function withoutProxy(env: NodeJS.ProcessEnv): Record<string, string | undefined> {
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !PROXY_VARS.test(key)));
 }
 
 export function has(bin: string): boolean {

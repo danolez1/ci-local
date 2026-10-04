@@ -60,6 +60,7 @@ function parseProfile(raw: unknown, where: string, problems: string[]): Profile 
   const registry = str(raw.registry, `${where}.registry`, problems, true);
   const ssh_host = str(raw.ssh_host, `${where}.ssh_host`, problems);
   if (transport === "ssh" && !ssh_host) problems.push(`${where}.ssh_host is required for the ssh transport`);
+  if (raw.proxy !== undefined && raw.proxy !== "none" && raw.proxy !== "inherit") problems.push(`${where}.proxy must be none or inherit`);
   if (ssh_host?.startsWith("-")) problems.push(`${where}.ssh_host must not start with a dash`);
   if (!transport || !registry) return undefined;
   return {
@@ -69,6 +70,7 @@ function parseProfile(raw: unknown, where: string, problems: string[]): Profile 
     insecure: raw.insecure === true,
     pull_registry: str(raw.pull_registry, `${where}.pull_registry`, problems),
     platform: str(raw.platform, `${where}.platform`, problems),
+    proxy: raw.proxy === "inherit" ? "inherit" : "none",
   };
 }
 

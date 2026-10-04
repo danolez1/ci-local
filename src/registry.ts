@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exec, has, must } from "./exec.ts";
+import { childEnv, exec, has, must } from "./exec.ts";
 import type { Profile } from "./types.ts";
 
 export interface Registry {
@@ -56,7 +56,7 @@ async function openTunnel(profile: Profile): Promise<Registry> {
         "-L", `127.0.0.1:${port}:${profile.registry}`,
         "--", host,
       ],
-      { stdout: "ignore", stderr: "pipe" },
+      { stdout: "ignore", stderr: "pipe", env: childEnv() },
     );
     for (let waited = 0; waited < 30_000; waited += 300) {
       if (ssh.exitCode !== null) break;

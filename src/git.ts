@@ -1,4 +1,4 @@
-import { exec, must } from "./exec.ts";
+import { childEnv, exec, must } from "./exec.ts";
 
 interface PushedRef {
   ref: string;
@@ -49,8 +49,8 @@ export async function committedFile(root: string, sha: string, path: string): Pr
 
 // Extracting the archive, not copying the tree, keeps untracked and ignored files out of the build.
 export async function archiveTo(root: string, sha: string, dest: string): Promise<void> {
-  const archive = Bun.spawn(["git", "-C", root, "archive", sha], { stdout: "pipe", stderr: "pipe" });
-  const tar = Bun.spawn(["tar", "-x", "-C", dest], { stdin: archive.stdout, stderr: "pipe" });
+  const archive = Bun.spawn(["git", "-C", root, "archive", sha], { stdout: "pipe", stderr: "pipe", env: childEnv() });
+  const tar = Bun.spawn(["tar", "-x", "-C", dest], { stdin: archive.stdout, stderr: "pipe", env: childEnv() });
   const [aCode, tCode] = await Promise.all([archive.exited, tar.exited]);
   if (aCode !== 0 || tCode !== 0) throw new Error(`could not extract ${sha} (git archive ${aCode}, tar ${tCode})`);
 }

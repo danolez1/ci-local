@@ -40,6 +40,8 @@ profiles:
 | `https` | Straight to the registry with the credentials in `~/.docker/config.json`. |
 | `direct` | Same as `https` for a registry you reach as is. Set `insecure: true` for plain http. |
 
+Every command ci-local runs has `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and `NO_PROXY` removed from its environment, so a stale proxy in your shell never reaches docker or crane. Set `proxy: inherit` on a profile to keep them. The Docker daemon's own proxy is out of ci-local's reach (on OrbStack it follows `network_proxy`); `ci-local doctor` shows it, and a build that fails with `proxyconnect` ends with the fix.
+
 A repo can define its own `profiles:` in `ci-local.yaml`; they win over global ones with the same name. The profile is chosen by, in order: `--profile`, `CI_LOCAL_PROFILE`, `profile:` in the repo, `default_profile`.
 
 ## Set up a repo

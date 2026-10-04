@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { ConfigError, loadGlobalConfig, loadRepoConfig, resolveProfile } from "./config.ts";
+import { daemonProxies, PROXY_HINT } from "./docker.ts";
 import { runImage, type RunFlags } from "./engine.ts";
 import { guardBuildEnv } from "./envguard.ts";
 import { exec, has } from "./exec.ts";
@@ -271,7 +272,14 @@ async function cmdDoctor(): Promise<number> {
     console.log(`${labels[state]}  ${msg}`);
   };
   line(has("docker") ? "ok" : "fail", "docker CLI");
-  line((await exec(["docker", "info"])).code === 0 ? "ok" : "fail", "docker daemon reachable");
+  const info = await exec(["docker", "info"]);
+  line(info.code === 0 ? "ok" : "fail", "docker daemon reachable");
+  const proxies = daemonProxies(info.out);
+  if (proxies.length) line("warn", `docker daemon uses a proxy (${proxies.join(", ")}). ${PROXY_HINT}`);
+  const clientConfig = join(homedir(), ".docker", "config.json");
+  if (existsSync(clientConfig) && /"proxies"\s*:/.test(readFileSync(clientConfig, "utf8"))) {
+    line("warn", `${clientConfig} sets proxies, which docker adds to every build as build args`);
+  }
   line(has("crane") ? "ok" : "fail", "crane (brew install crane)");
   line(has("ssh") ? "ok" : "warn", "ssh");
   line("ok", `state dir ${stateHome()}`);

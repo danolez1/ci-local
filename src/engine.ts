@@ -2,7 +2,8 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
-import { exec, must } from "./exec.ts";
+import { withProxyHint } from "./docker.ts";
+import { exec, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, shortSha, treeHash } from "./git.ts";
 import { readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
@@ -32,6 +33,7 @@ interface RunInput {
 export async function runImage(input: RunInput): Promise<RunRecord> {
   const { root, sha, spec, profile, flags } = input;
   const run = RunHandle.create({ repo_path: root, image: spec.image, sha, profile: input.profileName, echo: flags.echo });
+  setProxyMode(profile.proxy === "inherit");
   const platform = flags.platform ?? spec.platform ?? profile.platform ?? "linux/amd64";
   let registry: Registry | undefined;
   let workDir: string | undefined;
@@ -128,7 +130,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
         ],
         { onLine },
       );
-      if (r.code !== 0) throw new Error(`docker build exited ${r.code}`);
+      if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
     });
 
     if (registry) {
