@@ -22,6 +22,8 @@ export interface ImageSpec {
   dockerfile: string;
   context: string;
   platform?: string;
+  /** A Dockerfile stage to build, for several images from one Dockerfile; without it the last stage is built. */
+  target?: string;
   build_args_file?: string;
   /** Checked but never passed: the Dockerfile reads this file itself. */
   build_env?: string;

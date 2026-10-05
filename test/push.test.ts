@@ -224,3 +224,22 @@ test("--no-checks skips them for a manual run", async () => {
   expect(r.code, r.err).toBe(0);
   expect(checkRuns()).toBe(before);
 });
+
+test("two images from one Dockerfile build their own stage and get different tags", async () => {
+  writeFileSync(
+    join(repo, "ci-local.yaml"),
+    "version: 1\nbranches: [main]\nimages:\n  - name: api\n    image: acme/api\n    target: production\n  - name: backup\n    image: acme/backup\n    target: backup\n",
+  );
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "two stages");
+  writeFileSync(calls, "");
+  const r = await push();
+  expect(r.code).toBe(0);
+  const builds = log().split("\n").filter((l) => l.startsWith("docker buildx build"));
+  expect(builds.length).toBe(2);
+  expect(builds.find((l) => l.includes("--target production"))).toBeDefined();
+  expect(builds.find((l) => l.includes("--target backup"))).toBeDefined();
+  const tags = [...log().matchAll(/crane tag reg\.test:5000\/acme\/(api|backup):(sha-[0-9a-f]{12}) prod/g)].map((m) => m[2]);
+  expect(tags.length).toBe(2);
+  expect(tags[0]).not.toBe(tags[1]);
+});

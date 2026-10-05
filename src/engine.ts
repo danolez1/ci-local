@@ -12,6 +12,11 @@ import { recompressLayers } from "./recompress.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
+// The target joins the salt only when set, so images without one keep the tags they already have in the registry.
+export function tagSalt(platform: string, spec: ImageSpec, localHash: string): string {
+  return `${platform}|${spec.dockerfile}|${spec.context}${spec.target ? `|${spec.target}` : ""}|${localHash}`;
+}
+
 export interface RunFlags {
   push: boolean;
   /** Move :prod to this build. Only runs that follow the first configured branch should set it. */
@@ -82,7 +87,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       const hash = await treeHash(root, sha, {
         include: spec.tag_include,
         exclude: spec.tag_exclude,
-        salt: `${platform}|${spec.dockerfile}|${spec.context}|${localHash}`,
+        salt: tagSalt(platform, spec, localHash),
       });
       return `sha-${hash}`;
     });
@@ -153,6 +158,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
           "--platform", platform,
           "--provenance=false", "--sbom=false", "--progress=plain",
           "-f", within(ctx, spec.dockerfile),
+          ...(spec.target ? ["--target", spec.target] : []),
           ...buildArgs,
           ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
           within(ctx, spec.context),

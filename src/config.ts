@@ -40,6 +40,16 @@ function relPath(v: unknown, where: string, problems: string[]): string | undefi
   return value;
 }
 
+// The name is passed to docker as an argument, so only what a Dockerfile stage name can hold is accepted.
+function stageName(v: unknown, where: string, problems: string[]): string | undefined {
+  const value = str(v, where, problems);
+  if (value !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value)) {
+    problems.push(`${where} must be a Dockerfile stage name (letters, digits, dot, dash, underscore)`);
+    return undefined;
+  }
+  return value;
+}
+
 function oneOf<T extends string>(v: unknown, allowed: readonly T[], where: string, problems: string[]): T | undefined {
   const value = str(v, where, problems);
   if (value !== undefined && !allowed.includes(value as T)) {
@@ -184,6 +194,7 @@ export function parseRepoConfig(text: string): RepoConfig {
         dockerfile: relPath(item.dockerfile, `${where}.dockerfile`, problems) ?? defaults.dockerfile,
         context: relPath(item.context, `${where}.context`, problems) ?? defaults.context,
         platform: str(item.platform, `${where}.platform`, problems),
+        target: stageName(item.target, `${where}.target`, problems),
         build_args_file: relPath(item.build_args_file, `${where}.build_args_file`, problems),
         build_env: relPath(item.build_env, `${where}.build_env`, problems),
         build_env_local: relPath(item.build_env_local, `${where}.build_env_local`, problems),

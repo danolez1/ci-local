@@ -78,6 +78,7 @@ images:
     dockerfile: Dockerfile
     context: .
     platform: linux/amd64       # default; match the server's architecture
+    # target: production        # a Dockerfile stage; default is the last stage
     build_env: build.env        # committed, public values only
     # build_env_local: build.env  # instead of build_env, to keep the file gitignored (never both)
     build_args_file: args.env       # committed KEY=VALUE lines passed as --build-arg
@@ -148,7 +149,7 @@ The web view has paged, filterable run lists (status, repository, search), a run
 ## What gets built and tagged
 
 - The image is built from `git archive <sha>`, the files a clone would see. Untracked and ignored files never reach it, so a build that depends on a local-only file fails on your machine first.
-- The tag is `sha-` plus a hash of the committed files that can change the image (everything minus `tag_exclude`, or only `tag_include`), the platform and the Dockerfile path. A commit that changes nothing relevant finds its tag already in the registry and skips the build.
+- The tag is `sha-` plus a hash of the committed files that can change the image (everything minus `tag_exclude`, or only `tag_include`), the platform, the Dockerfile path and the `target`. A commit that changes nothing relevant finds its tag already in the registry and skips the build.
 - `build_env`, `build_env_local` and `build_args_file` may only hold public values. Every key needs a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_` by default), and values matching common credential formats (Stripe, GitHub, Slack and AWS keys, private key blocks, JWTs, `sk-` keys) are refused. That is a pattern check, not proof a value is safe. Secrets stay in the deploy platform's environment.
 
 ## Registry notes

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, parseGlobalConfig, parseRepoConfig, resolveProfile } from "../src/config.ts";
+import { tagSalt } from "../src/engine.ts";
+import type { ImageSpec } from "../src/types.ts";
 
 const repoYaml = `
 version: 1
@@ -19,6 +21,15 @@ describe("repo config", () => {
     expect(c.branches).toEqual(["main", "release/*"]);
     expect(c.images[0]).toMatchObject({ name: "web", image: "acme/web", dockerfile: "Dockerfile", context: ".", tag_exclude: ["docs"] });
     expect(c.images[1]).toMatchObject({ name: "api", dockerfile: "services/api/Dockerfile", tag_exclude: [] });
+  });
+
+  test("an image may name a Dockerfile stage, and only a plain stage name", () => {
+    const ok = parseRepoConfig("version: 1\nimages:\n  - image: acme/backup\n    target: backup\n  - image: acme/api\n");
+    expect(ok.images[0]?.target).toBe("backup");
+    expect(ok.images[1]?.target).toBeUndefined();
+    for (const bad of ["--output=x", "a b", "$(id)", "-x", ""]) {
+      expect(() => parseRepoConfig(`version: 1\nimages:\n  - image: acme/web\n    target: '${bad}'\n`)).toThrow(ConfigError);
+    }
   });
 
   test("reports every problem at once", () => {
@@ -84,4 +95,16 @@ test("a check with a missing command, a repeated or odd name, or a bad expiry is
   expect(() => parseRepoConfig(withChecks("  - name: a\n    run: x\n  - name: a\n    run: y\n"))).toThrow("used twice");
   expect(() => parseRepoConfig(withChecks("  - name: ../x\n    run: y\n"))).toThrow("may only use");
   expect(() => parseRepoConfig(withChecks("  - name: a\n    run: y\n    ttl_hours: 0\n"))).toThrow("whole number");
+});
+
+describe("tag salt", () => {
+  const spec = { dockerfile: "Dockerfile", context: ".", target: undefined } as ImageSpec;
+
+  test("an image without a target keeps the salt it had before targets existed", () => {
+    expect(tagSalt("linux/amd64", spec, "abc")).toBe("linux/amd64|Dockerfile|.|abc");
+  });
+
+  test("a target changes the salt", () => {
+    expect(tagSalt("linux/amd64", { ...spec, target: "backup" }, "abc")).toBe("linux/amd64|Dockerfile|.|backup|abc");
+  });
 });
