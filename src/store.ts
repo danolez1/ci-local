@@ -1,4 +1,4 @@
-import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, fstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 import type { PhaseRecord, RunRecord, RunStatus } from "./types.ts";
@@ -148,6 +148,38 @@ function allRuns(): RunRecord[] {
     out.push(rec);
   }
   return out;
+}
+
+export type ControlResult = "done" | "missing" | "running" | "not-running" | "foreign";
+
+/** Removes a finished run's record and log. A run that is still going has to be stopped first. */
+export function deleteRun(id: string): ControlResult {
+  const rec = readRun(id);
+  if (!rec) return "missing";
+  if (rec.status === "running") return "running";
+  rmSync(join(runsDir(), id), { recursive: true, force: true });
+  finished.delete(id);
+  return "done";
+}
+
+// The record's pid could belong to anything by now, so only a process that is plainly this tool is signalled.
+function isCiLocalProcess(pid: number): boolean {
+  const command = Bun.spawnSync(["ps", "-p", String(pid), "-o", "command="]).stdout.toString();
+  return /(^|[\s/])(ci-local|cli\.ts)(\s|$)/.test(command);
+}
+
+/** Asks the process running this run to stop; it marks the run failed and cleans up after itself. */
+export function stopRun(id: string): ControlResult {
+  const rec = readRun(id);
+  if (!rec) return "missing";
+  if (rec.status !== "running" || rec.pid === undefined) return "not-running";
+  if (!isCiLocalProcess(rec.pid)) return "foreign";
+  try {
+    process.kill(rec.pid, "SIGTERM");
+  } catch {
+    return "not-running";
+  }
+  return "done";
 }
 
 export function listRuns(limit = 20): RunRecord[] {

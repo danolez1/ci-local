@@ -39,6 +39,13 @@ async function pump(stream: ReadableStream<Uint8Array>, onLine?: (line: string) 
   return all;
 }
 
+const children = new Set<ReturnType<typeof Bun.spawn>>();
+
+/** Stops everything exec() started, so an interrupted run does not leave a docker build or an upload going. */
+export function killChildren(): void {
+  for (const proc of children) proc.kill("SIGTERM");
+}
+
 export async function exec(cmd: string[], options: ExecOptions = {}): Promise<ExecResult> {
   const proc = Bun.spawn(cmd, {
     cwd: options.cwd,
@@ -47,12 +54,17 @@ export async function exec(cmd: string[], options: ExecOptions = {}): Promise<Ex
     stdout: "pipe",
     stderr: "pipe",
   });
-  const [out, err, code] = await Promise.all([
-    pump(proc.stdout, options.onLine),
-    pump(proc.stderr, options.onLine),
-    proc.exited,
-  ]);
-  return { code, out, err };
+  children.add(proc);
+  try {
+    const [out, err, code] = await Promise.all([
+      pump(proc.stdout, options.onLine),
+      pump(proc.stderr, options.onLine),
+      proc.exited,
+    ]);
+    return { code, out, err };
+  } finally {
+    children.delete(proc);
+  }
 }
 
 export async function must(cmd: string[], options: ExecOptions = {}): Promise<string> {

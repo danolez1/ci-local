@@ -74,6 +74,9 @@
 
   h1.page { font-size: 20px; font-weight: 600; margin: 0 0 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .box { border: 1px solid var(--border); border-radius: 6px; background: var(--canvas); overflow: hidden; }
+  .box.list { overflow: visible; }
+  .box.list > .box-head { border-radius: 6px 6px 0 0; }
+  .box.list > .foot { border-radius: 0 0 6px 6px; }
   .box-head { background: var(--subtle); border-bottom: 1px solid var(--border); padding: 8px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; min-height: 49px; }
   .box-head strong { font-weight: 600; }
   .search { flex: 1; min-width: 180px; max-width: 420px; position: relative; }
@@ -85,12 +88,14 @@
   details.dd > summary::-webkit-details-marker { display: none; }
   details.dd > summary:hover { background: var(--inset); }
   details.dd[open] > summary { background: var(--inset); }
-  details.dd .pop { position: absolute; z-index: 30; right: 0; top: 38px; min-width: 220px; background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 0; }
+  .dd .pop { position: absolute; z-index: 30; right: 0; top: calc(100% + 6px); min-width: 220px; background: var(--canvas); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 8px 0; }
   details.dd.left .pop { left: 0; right: auto; }
+  #mainMenu > .pop { top: calc(100% + 16px); }
   .dd { position: relative; }
   .dd > .pop[hidden] { display: none; }
   .pop .ttl { padding: 4px 16px 8px; font-weight: 600; border-bottom: 1px solid var(--border-muted); margin-bottom: 4px; font-size: 12px; color: var(--muted); }
-  .pop button, .pop a.item { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 12px; padding: 6px 16px; background: none; border: 0; text-align: left; cursor: pointer; color: var(--fg); }
+  .pop button, .pop a.item { display: flex; width: 100%; justify-content: flex-start; align-items: center; gap: 12px; padding: 6px 16px; background: none; border: 0; text-align: left; cursor: pointer; color: var(--fg); }
+  .pop button .count { margin-left: auto; }
   .pop button:hover, .pop a.item:hover { background: var(--accent-subtle); text-decoration: none; }
   .pop .sep { border-top: 1px solid var(--border-muted); margin: 4px 0; }
 
@@ -171,6 +176,15 @@
   kbd { background: var(--subtle); border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 6px; padding: 0 6px; font-family: var(--mono); font-size: 12px; }
   table.keys { border-collapse: collapse; width: 100%; } table.keys td { padding: 4px 0; } table.keys td:first-child { width: 120px; }
   pre.cli { background: var(--subtle); border: 1px solid var(--border); border-radius: 6px; padding: 12px; margin: 0; overflow: auto; font-size: 12px; }
+  .hbtn.danger { color: var(--danger); }
+  .hbtn:disabled, .pop button:disabled { opacity: .45; cursor: not-allowed; }
+  .hbtn:disabled:hover { background: var(--subtle); }
+  .pop button:disabled:hover { background: none; }
+  .pop button.danger { color: var(--danger); }
+  .pop button svg { width: 14px; height: 14px; fill: currentColor; flex: none; }
+  .row .act { align-self: center; }
+  .row .act summary { height: 28px; padding: 0 8px; font-size: 12px; }
+  .runacts { display: flex; gap: 8px; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #24292f; color: #fff; padding: 8px 16px; border-radius: 6px; z-index: 50; box-shadow: var(--shadow); }
 </style>
 </head>
@@ -179,11 +193,7 @@
   <a class="brand" href="#/"><svg viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#1f6feb"/><path d="M4 8.5l2.5 2.5L12 5.5" stroke="#fff" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>ci-local</a>
   <div class="grow"></div>
   <span class="live" id="live" title="Auto refresh"><i></i><span>Live</span></span>
-  <div class="dd" id="themeMenu">
-    <button class="hbtn" id="themeBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Theme" title="Theme"></button>
-    <div class="pop" hidden><div class="ttl">Appearance</div>
-      <button data-theme-set="light">Light</button><button data-theme-set="dark">Dark</button><button data-theme-set="system">Sync with system</button></div>
-  </div>
+  <button class="hbtn" id="themeBtn" aria-label="Theme" title="Theme"></button>
   <div class="dd" id="mainMenu">
     <button class="hbtn" id="menuBtn" aria-haspopup="menu" aria-expanded="false" aria-label="Menu" title="Menu"><svg viewBox="0 0 16 16"><path d="M1 2.75A.75.75 0 0 1 1.75 2h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 2.75Zm0 5A.75.75 0 0 1 1.75 7h12.5a.75.75 0 0 1 0 1.5H1.75A.75.75 0 0 1 1 7.75ZM1.75 12h12.5a.75.75 0 0 1 0 1.5H1.75a.75.75 0 0 1 0-1.5Z"/></svg><span>Menu</span></button>
     <div class="pop" hidden>
@@ -241,12 +251,16 @@ const THEME_ICONS = {
   dark: '<svg viewBox="0 0 16 16"><path d="M9.598 1.591a.749.749 0 0 1 .785-.175 7.001 7.001 0 1 1-8.967 8.967.75.75 0 0 1 .961-.96 5.5 5.5 0 0 0 7.046-7.046.75.75 0 0 1 .175-.786Zm1.616 1.945a7 7 0 0 1-7.678 7.678 5.499 5.499 0 1 0 7.678-7.678Z"/></svg>',
   system: '<svg viewBox="0 0 16 16"><path d="M0 2.75C0 1.784.784 1 1.75 1h12.5c.966 0 1.75.784 1.75 1.75v8.5A1.75 1.75 0 0 1 14.25 13H8.06l.823 1.78a.75.75 0 0 1-1.366.63L6.405 13H1.75A1.75 1.75 0 0 1 0 11.25Zm1.75-.25a.25.25 0 0 0-.25.25v8.5c0 .138.112.25.25.25h12.5a.25.25 0 0 0 .25-.25v-8.5a.25.25 0 0 0-.25-.25Z"/></svg>',
 };
+const THEME_ORDER = ["system", "light", "dark"];
 function applyTheme() {
   document.documentElement.dataset.theme = settings.theme;
   const b = $("#themeBtn");
-  if (b) b.innerHTML = THEME_ICONS[settings.theme] || THEME_ICONS.system;
+  if (!b) return;
+  b.innerHTML = THEME_ICONS[settings.theme] || THEME_ICONS.system;
+  b.title = `Theme: ${settings.theme}. Click to change.`;
 }
 function setTheme(t) { settings.theme = t; saveSettings(); applyTheme(); }
+$("#themeBtn").onclick = () => setTheme(THEME_ORDER[(THEME_ORDER.indexOf(settings.theme) + 1) % THEME_ORDER.length]);
 
 /* formatting */
 const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -327,7 +341,8 @@ function rowHtml(r) {
   return `<div class="row" role="link" data-id="${esc(r.id)}" tabindex="0">
     <div class="ic">${icon(r.status)}</div>
     <div class="main"><div class="title">${esc(r.image)}</div><div class="sub">${sub.join(" · ")}</div></div>
-    <div class="side"><span>${r.status === "running" ? dur(r.started) : r.ended ? dur(r.started, r.ended) : "-"}</span><span title="${esc(tip(r.started))}">${ago(r.started)}</span></div></div>`;
+    <div class="side"><span>${r.status === "running" ? dur(r.started) : r.ended ? dur(r.started, r.ended) : "-"}</span><span title="${esc(tip(r.started))}">${ago(r.started)}</span></div>
+    <div class="act">${actionsHtml(r)}</div></div>`;
 }
 function pagerHtml(page, pages, p) {
   if (pages <= 1) return "";
@@ -365,7 +380,7 @@ async function renderRuns(force) {
   const from = data.total ? (data.page - 1) * data.perPage + 1 : 0, to = Math.min(data.total, data.page * data.perPage);
   $("#view").innerHTML = `<div class="layout">${side}<section>
     <h1 class="page">${esc(p.image || p.repo || "All runs")}</h1>
-    <div class="box"><div class="box-head">
+    <div class="box list"><div class="box-head">
       <div class="search">${ICON_SEARCH}<input id="q" type="search" placeholder="Search image, sha, tag, branch" value="${esc(p.q)}" autocomplete="off"></div>
       <div class="grow"></div>
       <details class="dd"><summary>Status${p.status ? ": " + esc(p.status) : ""} &#9662;</summary><div class="pop"><div class="ttl">Filter by status</div>${statusItems}</div></details>
@@ -373,7 +388,8 @@ async function renderRuns(force) {
     <div class="foot"><span>${data.total ? `${from}-${to} of ${data.total} runs` : "0 runs"}</span>
       <label>Rows per page <select id="pp">${[10, 25, 50, 100].map((n) => `<option ${n === settings.perPage ? "selected" : ""}>${n}</option>`).join("")}</select></label></div></div>
     ${pagerHtml(data.page, data.pages, p)}</section></div>`;
-  $$("#view .row").forEach((el) => { el.onclick = () => (location.hash = "#/runs/" + el.dataset.id); el.onkeydown = (e) => e.key === "Enter" && el.click(); });
+  $$("#view .row").forEach((el) => { el.onclick = (e) => { if (!e.target.closest(".act")) location.hash = "#/runs/" + el.dataset.id; }; el.onkeydown = (e) => e.key === "Enter" && e.target === el && el.click(); });
+  bindControls($("#view"));
   $$("#view [data-status]").forEach((b) => (b.onclick = () => (location.hash = runsUrl({ ...p, status: b.dataset.status, page: "" }))));
   const q = $("#q"); let t;
   q.oninput = () => { clearTimeout(t); t = setTimeout(() => (location.hash = runsUrl({ ...p, q: q.value.trim(), page: "" })), 300); };
@@ -440,7 +456,7 @@ async function renderRun(force) {
 }
 
 function buildRunShell() {
-  $("#view").innerHTML = `<div class="run-head"><div id="rIcon"></div><div><h1 id="rTitle"></h1><div class="meta" id="rMeta"></div></div></div>
+  $("#view").innerHTML = `<div class="run-head"><div id="rIcon"></div><div><h1 id="rTitle"></h1><div class="meta" id="rMeta"></div></div><div class="grow"></div><div id="rActions"></div></div>
     <div id="rErr"></div>
     <div class="run-grid"><div><div class="box"><div class="box-head"><strong>Phases</strong></div><div class="steps" id="rSteps" style="padding:8px"></div></div>
       <div id="rPush" style="margin-top:16px"></div><div id="rDeploy" style="margin-top:16px"></div></div>
@@ -477,6 +493,8 @@ function updateRunShell() {
   $("#rTitle").textContent = r.image;
   $("#rMeta").innerHTML = [`<span>${esc(r.repo)}</span>`, `<span class="mono">${esc(r.sha.slice(0, 7))}</span>`, r.ref ? `<span class="chip blue">${esc(r.ref)}</span>` : "", r.tag ? `<span class="mono">${esc(r.tag)}</span>` : "",
     `<span class="st-${esc(r.status)}">${esc(r.status)}</span>`, `<span title="${esc(tip(r.started))}">${r.status === "running" ? "running for " + dur(r.started) : "took " + dur(r.started, r.ended)}, ${ago(r.started)}</span>`, `<span>profile ${esc(r.profile)}</span>`].filter(Boolean).join("");
+  $("#rActions").innerHTML = actionButtons(r);
+  bindControls($("#rActions"));
   $("#rErr").innerHTML = r.error ? `<div class="banner">${esc(r.error)}</div>` : "";
   $("#rSteps").innerHTML = r.phases.length ? r.phases.map((p, i) => `<a href="#" data-step="${i}">${icon(p.status === "running" ? "running" : p.status === "failed" ? "failed" : "done", 16)}<span>${esc(p.name)}</span><span class="t">${dur(p.started, p.ended)}</span></a>`).join("") : '<div class="empty" style="padding:12px">No phases yet</div>';
   $$("#rSteps a").forEach((a) => (a.onclick = (e) => { e.preventDefault(); const g = cur.groups[+a.dataset.step]; if (g) g.scrollIntoView({ block: "start" }); }));
@@ -549,6 +567,35 @@ function filterLog() {
 }
 
 /* shell: menus, dialogs, keys */
+const ICON_TRASH = '<svg viewBox="0 0 16 16"><path d="M11 1.75V3h2.25a.75.75 0 0 1 0 1.5H2.75a.75.75 0 0 1 0-1.5H5V1.75C5 .784 5.784 0 6.75 0h2.5C10.216 0 11 .784 11 1.75ZM4.496 6.675l.66 6.6a.25.25 0 0 0 .249.225h5.19a.25.25 0 0 0 .249-.225l.66-6.6a.75.75 0 0 1 1.492.149l-.66 6.6A1.748 1.748 0 0 1 10.595 15h-5.19a1.75 1.75 0 0 1-1.741-1.575l-.66-6.6a.75.75 0 1 1 1.492-.15ZM6.5 1.75V3h3V1.75a.25.25 0 0 0-.25-.25h-2.5a.25.25 0 0 0-.25.25Z"/></svg>';
+const ICON_STOP = '<svg viewBox="0 0 16 16"><rect x="3" y="3" width="10" height="10" rx="1.75"/></svg>';
+const CONTROL_FAILED = { "not-running": "That run is no longer running", foreign: "The run's process is not ci-local, so it was left alone", missing: "Run not found", running: "Stop the run before deleting it" };
+function actionsHtml(run) {
+  const running = run.status === "running", id = esc(run.id);
+  return `<details class="dd"><summary>Actions &#9662;</summary><div class="pop">
+    <button class="danger" data-run-act="stop" data-id="${id}" ${running ? "" : "disabled"}>${ICON_STOP}Stop run</button>
+    <button data-run-act="delete" data-id="${id}" ${running ? "disabled" : ""}>${ICON_TRASH}Delete run</button></div></details>`;
+}
+function actionButtons(run) {
+  const running = run.status === "running", id = esc(run.id);
+  return `<div class="runacts"><button class="hbtn danger" data-run-act="stop" data-id="${id}" ${running ? "" : "disabled"}>${ICON_STOP}Stop</button>
+    <button class="hbtn" data-run-act="delete" data-id="${id}" ${running ? "disabled" : ""}>${ICON_TRASH}Delete</button></div>`;
+}
+async function controlRun(id, act) {
+  const stop = act === "stop";
+  if (!confirm(stop ? "Stop this run? A push waiting on it will fail." : "Delete this run and its log?")) return;
+  try {
+    const res = await fetch("/api/runs/" + encodeURIComponent(id) + (stop ? "/stop" : ""), { method: stop ? "POST" : "DELETE", headers: { "x-ci-local": "1" } });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return toast(CONTROL_FAILED[body.result] || "Request failed");
+  } catch { return toast("Request failed"); }
+  toast(stop ? "Stopping the run" : "Run deleted");
+  if (!stop && route.name === "run") location.hash = "#/";
+  tick(true);
+}
+function bindControls(root) {
+  for (const b of $$("[data-run-act]", root)) b.onclick = () => { b.closest("details")?.removeAttribute("open"); controlRun(b.dataset.id, b.dataset.runAct); };
+}
 function toast(msg) { const t = document.createElement("div"); t.className = "toast"; t.textContent = msg; document.body.append(t); setTimeout(() => t.remove(), 1600); }
 async function copy(text) { try { await navigator.clipboard.writeText(text); toast("Copied"); } catch { toast("Copy failed"); } }
 function settingsHtml() {
@@ -567,22 +614,18 @@ function openSettings() {
   }));
   $("#dlgSettings").showModal();
 }
-function closeMenus(except) {
-  for (const d of $$("#themeMenu, #mainMenu")) {
-    const pop = $(":scope > .pop", d), btn = $(":scope > .hbtn", d);
-    if (!pop || d === except) continue;
-    pop.hidden = true; btn?.setAttribute("aria-expanded", "false");
-  }
+function closeMenus() {
+  const menu = $("#mainMenu"), pop = $(":scope > .pop", menu), btn = $(":scope > .hbtn", menu);
+  pop.hidden = true; btn.setAttribute("aria-expanded", "false");
 }
-for (const id of ["#themeMenu", "#mainMenu"]) {
-  const root = $(id), btn = $(":scope > .hbtn", root), pop = $(":scope > .pop", root);
-  btn.onclick = (e) => { e.stopPropagation(); const open = pop.hidden; closeMenus(root); pop.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
+{
+  const btn = $("#menuBtn"), pop = $("#mainMenu > .pop");
+  btn.onclick = (e) => { e.stopPropagation(); const open = pop.hidden; closeMenus(); pop.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
 }
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#themeMenu, #mainMenu")) closeMenus();
+  if (!e.target.closest("#mainMenu")) closeMenus();
   const close = e.target.closest("[data-close]"); if (close) close.closest("dialog").close();
   const c = e.target.closest("[data-copy]"); if (c) { e.stopPropagation(); copy(c.dataset.copy); }
-  const th = e.target.closest("[data-theme-set]"); if (th) { setTheme(th.dataset.themeSet); closeMenus(); }
   const act = e.target.closest("[data-act]");
   if (act) {
     closeMenus();

@@ -203,3 +203,53 @@ test("the page serves its bundled font from its own origin", async () => {
   expect((await font.arrayBuffer()).byteLength).toBeGreaterThan(50_000);
   expect((await fetch(`http://${host}/fonts/Urbanist.ttf`, { headers: { host: "evil.test" } })).status).toBe(403);
 });
+
+const change = (method: string, path: string, headers: Record<string, string> = {}) => fetch(`http://${host}${path}`, { method, headers: { host, "x-ci-local": "1", ...headers } });
+
+test("changes need the same origin and the marker header", async () => {
+  const run = RunHandle.create({ repo_path: "/work/gamma", image: "gamma/web", sha: "c".repeat(40), profile: "p", echo: false });
+  run.finish("failed", "boom");
+  const bare = await fetch(`http://${host}/api/runs/${run.record.id}`, { method: "DELETE", headers: { host } });
+  expect(bare.status).toBe(403);
+  expect((await change("DELETE", `/api/runs/${run.record.id}`, { origin: "http://evil.test" })).status).toBe(403);
+  expect(readRun(run.record.id)).not.toBeNull();
+});
+
+test("a finished run can be deleted from the page, and the list forgets it", async () => {
+  const run = RunHandle.create({ repo_path: "/work/gamma", image: "gamma/web", sha: "c".repeat(40), profile: "p", echo: false });
+  run.finish("success");
+  const before = queryRuns({ repo: "gamma" }).total;
+  const res = await change("DELETE", `/api/runs/${run.record.id}`, { origin: `http://${host}` });
+  expect(res.status).toBe(200);
+  expect(await res.json()).toEqual({ result: "done" });
+  expect(readRun(run.record.id)).toBeNull();
+  expect(queryRuns({ repo: "gamma" }).total).toBe(before - 1);
+  expect((await change("DELETE", `/api/runs/${run.record.id}`)).status).toBe(404);
+});
+
+test("a run that is still going cannot be deleted, and a finished one cannot be stopped", async () => {
+  const running = RunHandle.create({ repo_path: "/work/delta", image: "delta/web", sha: "d".repeat(40), profile: "p", echo: false });
+  expect((await change("DELETE", `/api/runs/${running.record.id}`)).status).toBe(409);
+  expect(readRun(running.record.id)).not.toBeNull();
+  running.finish("failed");
+  expect((await change("POST", `/api/runs/${running.record.id}/stop`)).status).toBe(409);
+  expect((await get(`/api/runs/${running.record.id}/stop`)).status).toBe(405);
+});
+
+test("stopping signals only a process that is plainly ci-local", async () => {
+  const foreign = Bun.spawn(["sleep", "30"]);
+  const ours = Bun.spawn(["sh", "-c", "sleep 5; true", "cli.ts"]);
+  try {
+    for (const [child, expected] of [[foreign, 409], [ours, 200]] as const) {
+      const run = RunHandle.create({ repo_path: "/work/eps", image: "eps/web", sha: "e".repeat(40), profile: "p", echo: false });
+      run.record.pid = child.pid;
+      run.set({});
+      expect((await change("POST", `/api/runs/${run.record.id}/stop`)).status).toBe(expected);
+    }
+    expect(await ours.exited).not.toBe(0);
+    expect(foreign.killed).toBe(false);
+  } finally {
+    foreign.kill();
+    ours.kill();
+  }
+});

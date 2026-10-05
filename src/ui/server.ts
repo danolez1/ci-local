@@ -1,7 +1,7 @@
 import pkg from "../../package.json" with { type: "json" };
 import urbanist from "./fonts/Urbanist.ttf" with { type: "file" };
 import pageSource from "./index.html" with { type: "text" };
-import { logPath, queryRuns, readLog, readRun, runStats, stateHome } from "../store.ts";
+import { type ControlResult, deleteRun, logPath, queryRuns, readLog, readRun, runStats, stateHome, stopRun } from "../store.ts";
 
 // @types/bun types .html imports as a bundle; with the text attribute the runtime value is the file contents.
 const page = pageSource as unknown as string;
@@ -27,6 +27,21 @@ function int(value: string | null, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
+// A page on another origin can send a request to 127.0.0.1, so a change needs the same origin plus a header
+// that browsers only let a page add after a preflight, which this server never answers.
+function isTrustedChange(req: Request): boolean {
+  const origin = req.headers.get("origin");
+  return req.headers.get("x-ci-local") === "1" && (origin === null || origin === `http://${req.headers.get("host")}`);
+}
+
+const CONTROL_STATUS: Record<ControlResult, number> = { done: 200, missing: 404, running: 409, "not-running": 409, foreign: 409 };
+
+function control(req: Request, id: string, action: "stop" | "delete"): Response {
+  if (!isTrustedChange(req)) return json(req, { error: "forbidden" }, 403);
+  const result = action === "stop" ? stopRun(id) : deleteRun(id);
+  return json(req, { result }, CONTROL_STATUS[result]);
+}
+
 function route(req: Request): Response {
   if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.get("host") ?? "")) return json(req, { error: "forbidden" }, 403);
   const url = new URL(req.url);
@@ -49,9 +64,13 @@ function route(req: Request): Response {
     );
   }
   if (path === "/api/stats") return json(req, runStats());
-  const m = path.match(/^\/api\/runs\/([\w.-]+)(\/log|\/raw)?$/);
+  const m = path.match(/^\/api\/runs\/([\w.-]+)(\/log|\/raw|\/stop)?$/);
   if (!m) return json(req, { error: "not found" }, 404);
   const id = m[1] as string;
+  if (req.method === "DELETE" && !m[2]) return control(req, id, "delete");
+  if (req.method === "POST" && m[2] === "/stop") return control(req, id, "stop");
+  if (req.method !== "GET" && req.method !== "HEAD") return json(req, { error: "method not allowed" }, 405);
+  if (m[2] === "/stop") return json(req, { error: "method not allowed" }, 405);
   if (m[2] === "/raw") {
     const file = logPath(id);
     if (!file || !Bun.file(file).size) return json(req, { error: "not found" }, 404);

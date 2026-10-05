@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
-import { exec, has, must, setProxyMode } from "./exec.ts";
+import { exec, has, killChildren, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
@@ -55,6 +55,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
   const onSignal = (signal: string) => {
     run.say(`interrupted by ${signal}`);
     run.finish("failed", "interrupted");
+    killChildren();
     void cleanup().finally(() => process.exit(130));
   };
   process.once("SIGINT", onSignal);
