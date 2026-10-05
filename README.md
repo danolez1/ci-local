@@ -71,7 +71,11 @@ images:
     build_args_file: args.env       # committed KEY=VALUE lines passed as --build-arg
     tag_exclude: [docs, README.md]    # paths that cannot change the image
     tag_include: []             # if set, only these paths decide the tag
+    # compression: zstd        # default gzip; zstd layers are roughly a third smaller
+    # zstd_level: 19            # 1 to 22, default 19
 ```
+
+`compression: zstd` exports the image as an OCI layout instead of loading it into Docker, recompresses each layer with the `zstd` CLI (`brew install zstd`) and pushes that. In a real 1.15 GB Next.js image it cut the upload from 601.7 MB to 406.3 MB at level 19. Recompressed layers are cached by content under the state directory for 14 days, so only changed layers are compressed again, and the push skips layers the registry already has. The server that pulls the image needs Docker Engine 23 or newer (or containerd 1.5 or newer). The image is pushed with an OCI manifest, so a registry that refuses Docker v2 manifests accepts it. `--keep-local` has no effect because the image never enters the local daemon.
 
 `build_env_local` is for values you would rather not commit: the file is read from your working tree, checked like `build_env`, copied into the build context at the same path, and hashed into the tag so a changed value never reuses an old image. Use one of `build_env` or `build_env_local` per file. Commit a `<file>.example` template next to it; `init --build-env` creates it and adds the real file to `.gitignore`, and `doctor` warns when the template is missing. Paths (`dockerfile`, `context`, `build_env`, `build_env_local`, `build_args_file`) must be relative and stay inside the repo, and the env files must be regular files, not symlinks. Top-level `dockerfile`, `context`, `tag_exclude` and `tag_include` are defaults for every image, so a monorepo lists several entries under `images`. `ci-local config` prints the resolved result.
 

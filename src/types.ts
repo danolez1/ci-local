@@ -26,6 +26,9 @@ export interface ImageSpec {
   /** Checked but never passed: the Dockerfile reads this file itself. */
   build_env?: string;
   build_env_local?: string;
+  /** zstd layers are about a third smaller than gzip ones; the registry's pull side needs Docker 23 or newer. */
+  compression: "gzip" | "zstd";
+  zstd_level: number;
   tag_include: string[];
   tag_exclude: string[];
 }

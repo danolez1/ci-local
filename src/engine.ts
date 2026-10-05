@@ -3,11 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
-import { exec, must, setProxyMode } from "./exec.ts";
+import { exec, has, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
-import { RunHandle } from "./store.ts";
+import { recompressLayers } from "./recompress.ts";
+import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { ImageSpec, Profile, RunRecord } from "./types.ts";
 
 export interface RunFlags {
@@ -101,6 +102,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
 
     await run.phase("docker", async () => {
       if ((await exec(["docker", "info"])).code !== 0) throw new Error("docker is not running (start OrbStack or Docker Desktop)");
+      if (spec.compression === "zstd" && flags.push && !has("zstd")) throw new Error("zstd is not installed (brew install zstd)");
     });
 
     if (flags.push) registry = await run.phase("registry", () => openRegistry(profile));
@@ -122,7 +124,10 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       if (spec.build_env_local && localEnv !== undefined) placeFile(ctx, spec.build_env_local, localEnv);
     });
 
-    localTag = `ci-local/${spec.image}:${tag}`;
+    // The image is exported as an OCI layout and recompressed, so it is never loaded into the local daemon.
+    const zstd = registry !== undefined && spec.compression === "zstd";
+    const ociDir = join(workDir, "image-oci");
+    if (!zstd) localTag = `ci-local/${spec.image}:${tag}`;
     await run.phase("build", async () => {
       // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
       for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
@@ -141,8 +146,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
           "--provenance=false", "--sbom=false", "--progress=plain",
           "-f", within(ctx, spec.dockerfile),
           ...buildArgs,
-          "-t", localTag as string,
-          "--load",
+          ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
           within(ctx, spec.context),
         ],
         { onLine },
@@ -151,12 +155,20 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
     });
 
     if (registry) {
-      const tarball = join(workDir, "image.tar");
-      await run.phase("save", async () => {
-        await must(["docker", "save", "-o", tarball, localTag as string]);
-      });
+      let artifact = join(workDir, "image.tar");
+      if (zstd) {
+        artifact = ociDir;
+        await run.phase("compress", async () => {
+          const stats = await recompressLayers(ociDir, spec.zstd_level, zstdCacheDir(), onLine);
+          run.say(`compressed to zstd-${spec.zstd_level}: ${stats.compressed} layers compressed, ${stats.cached} reused, ${Math.round(stats.before / 1e6)} MB -> ${Math.round(stats.after / 1e6)} MB`);
+        });
+      } else {
+        await run.phase("save", async () => {
+          await must(["docker", "save", "-o", artifact, localTag as string]);
+        });
+      }
       await run.phase("push", async () => {
-        await registry!.push(tarball, spec.image, tag, { onLine, onProgress: (push) => run.set({ push }) });
+        await registry!.push(artifact, spec.image, tag, { onLine, onProgress: (push) => run.set({ push }) });
       });
       run.set({ pushed: true });
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));

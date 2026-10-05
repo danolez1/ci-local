@@ -7,6 +7,7 @@ export function stateHome(): string {
   return process.env.CI_LOCAL_STATE_DIR ?? join(homedir(), ".local", "state", "ci-local");
 }
 
+export const zstdCacheDir = (): string => join(stateHome(), "zstd-cache");
 const runsDir = (): string => join(stateHome(), "runs");
 const SAFE_ID = /^[\w.-]+$/;
 

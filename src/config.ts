@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { isSafeRelative } from "./paths.ts";
+import { DEFAULT_ZSTD_LEVEL } from "./recompress.ts";
 import type { GlobalConfig, ImageSpec, Profile, RepoConfig, Transport } from "./types.ts";
 
 export class ConfigError extends Error {
@@ -37,6 +38,24 @@ function relPath(v: unknown, where: string, problems: string[]): string | undefi
     return undefined;
   }
   return value;
+}
+
+function oneOf<T extends string>(v: unknown, allowed: readonly T[], where: string, problems: string[]): T | undefined {
+  const value = str(v, where, problems);
+  if (value !== undefined && !allowed.includes(value as T)) {
+    problems.push(`${where} must be one of ${allowed.join(", ")}`);
+    return undefined;
+  }
+  return value as T | undefined;
+}
+
+function zstdLevel(v: unknown, where: string, problems: string[]): number | undefined {
+  if (v === undefined || v === null) return undefined;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > 22) {
+    problems.push(`${where} must be a whole number from 1 to 22`);
+    return undefined;
+  }
+  return v;
 }
 
 function strList(v: unknown, where: string, problems: string[]): string[] {
@@ -140,6 +159,8 @@ export function parseRepoConfig(text: string): RepoConfig {
         build_args_file: relPath(item.build_args_file, `${where}.build_args_file`, problems),
         build_env: relPath(item.build_env, `${where}.build_env`, problems),
         build_env_local: relPath(item.build_env_local, `${where}.build_env_local`, problems),
+        compression: oneOf(item.compression, ["gzip", "zstd"], `${where}.compression`, problems) ?? "gzip",
+        zstd_level: zstdLevel(item.zstd_level, `${where}.zstd_level`, problems) ?? DEFAULT_ZSTD_LEVEL,
         tag_include: item.tag_include === undefined ? defaults.tag_include : strList(item.tag_include, `${where}.tag_include`, problems),
         tag_exclude: item.tag_exclude === undefined ? defaults.tag_exclude : strList(item.tag_exclude, `${where}.tag_exclude`, problems),
       });

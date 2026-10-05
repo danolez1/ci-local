@@ -8,5 +8,6 @@ images:
     dockerfile: Dockerfile
     context: .
     tag_exclude: [.github, docs, README.md]
+    # compression: zstd   # about a third less to upload; the pulling server needs Docker 23 or newer
     # Public values only (NEXT_PUBLIC_*, VITE_*). ci-local refuses anything that looks like a secret.
     # build_env: build.env

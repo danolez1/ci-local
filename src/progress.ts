@@ -1,3 +1,5 @@
+import { readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { exec } from "./exec.ts";
 import type { PushProgress } from "./types.ts";
 
@@ -27,13 +29,28 @@ export function formatBytes(n: number): string {
   return `${Math.round(n / 1e3)} KB`;
 }
 
-// crane looks blobs up a few at a time, so the total it has seen keeps growing; the tarball knows it upfront.
-export async function blobCount(tarball: string): Promise<number | undefined> {
-  const r = await exec(["tar", "-xOqf", tarball, "manifest.json"]);
+// crane looks blobs up a few at a time, so the total it has seen keeps growing; the image knows it upfront.
+export async function blobCount(image: string): Promise<number | undefined> {
+  try {
+    if (statSync(image).isDirectory()) return ociBlobCount(image);
+  } catch {
+    return undefined;
+  }
+  const r = await exec(["tar", "-xOqf", image, "manifest.json"]);
   if (r.code !== 0) return undefined;
   try {
     const images = JSON.parse(r.out) as Array<{ Layers?: string[] }>;
-    return images.reduce((n, image) => n + (image.Layers?.length ?? 0) + 1, 0);
+    return images.reduce((n, entry) => n + (entry.Layers?.length ?? 0) + 1, 0);
+  } catch {
+    return undefined;
+  }
+}
+
+function ociBlobCount(dir: string): number | undefined {
+  try {
+    const read = (digest: string) => JSON.parse(readFileSync(join(dir, "blobs", "sha256", digest.slice("sha256:".length)), "utf8")) as { layers?: unknown[] };
+    const index = JSON.parse(readFileSync(join(dir, "index.json"), "utf8")) as { manifests: Array<{ digest: string }> };
+    return (read((index.manifests[0] as { digest: string }).digest).layers?.length ?? 0) + 1;
   } catch {
     return undefined;
   }

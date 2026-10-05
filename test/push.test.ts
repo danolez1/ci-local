@@ -2,7 +2,8 @@ import { afterAll, beforeAll, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { exec, must } from "../src/exec.ts";
+import { exec, has, must } from "../src/exec.ts";
+import { makeOciLayout } from "./oci-fixture.ts";
 
 const cli = join(import.meta.dir, "..", "bin", "ci-local.mjs");
 let base = "";
@@ -28,7 +29,10 @@ beforeAll(async () => {
   stub(bin, "docker", `echo "docker $*" >> "${calls}"
 case "$1" in
   info) exit 0 ;;
-  buildx) [ -f "${base}/fail-build" ] && exit 1; exit 0 ;;
+  buildx)
+    [ -f "${base}/fail-build" ] && exit 1
+    case "$*" in *type=oci*) cp -R "${base}/fixture-oci" "$(printf '%s' "$*" | sed -n 's/.*dest=\\([^, ]*\\).*/\\1/p')" ;; esac
+    exit 0 ;;
   save) while [ $# -gt 0 ]; do [ "$1" = "-o" ] && : > "$2"; shift; done; exit 0 ;;
   *) exit 0 ;;
 esac`);
@@ -41,6 +45,7 @@ case "$1" in
     exit 0 ;;
   *) exit 0 ;;
 esac`);
+  makeOciLayout(join(base, "fixture-oci"), ["layer one ".repeat(2000), "layer two ".repeat(2000)]);
   const cfg = join(base, "cfg");
   mkdirSync(cfg);
   writeFileSync(join(cfg, "config.yaml"), "default_profile: t\nprofiles:\n  t: { transport: direct, registry: 'reg.test:5000', pull_registry: '127.0.0.1:5000' }\n");
@@ -144,4 +149,19 @@ test("an upload that keeps failing stops the push after three attempts and says 
   expect(r.err).toContain("after 3 attempts");
   expect(log().match(/^crane push /gm)?.length).toBe(3);
   expect((await must(["git", "-C", remote, "rev-parse", "main"])).trim()).toBe(before);
+});
+
+const zstdTest = has("zstd") ? test : test.skip;
+
+zstdTest("an image set to zstd is exported as an OCI layout, recompressed, and pushed as a directory", async () => {
+  writeFileSync(join(repo, "ci-local.yaml"), "version: 1\nbranches: [main]\nimages:\n  - image: acme/web\n    compression: zstd\n    zstd_level: 3\n");
+  writeFileSync(join(repo, "zstd.txt"), "change\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "zstd");
+  writeFileSync(calls, "");
+  const r = await push();
+  expect(r.code).toBe(0);
+  expect(log()).toMatch(/docker buildx build .*--output type=oci,tar=false,dest=\S+image-oci,compression=uncompressed/);
+  expect(log()).not.toContain("docker save");
+  expect(log()).toMatch(/crane push -v .*image-oci reg\.test:5000\/acme\/web:sha-[0-9a-f]{12}/);
 });
