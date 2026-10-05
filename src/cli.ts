@@ -33,7 +33,7 @@ const HELP = `ci-local: build images on this machine and publish them to a regis
   ci-local doctor                 check tools, config and the hook
   ci-local config                 print the resolved configuration
 
-run flags: --image <name> --sha <rev> --profile <name> --platform <os/arch> --dry-run --no-push --retag --keep-local
+run flags: --image <name> --sha <rev> --profile <name> --platform <os/arch> --dry-run --no-push --retag --keep-local --no-checks
 env: CI_LOCAL_SKIP_IMAGE=1 skips the hook, CI_LOCAL_PROFILE picks a profile, CI_LOCAL_CONFIG_DIR and CI_LOCAL_STATE_DIR move the files.
 `;
 
@@ -90,7 +90,7 @@ async function runAll(opts: { cwd: string; sha?: string; images?: string[]; prof
   if (wanted.length === 0) throw new ConfigError([`no image matches ${opts.images?.join(", ")} (known: ${ctx.config.images.map((i) => i.name).join(", ")})`]);
   const results: RunRecord[] = [];
   for (const spec of wanted) {
-    results.push(await runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, flags: opts.flags }));
+    results.push(await runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, checks: ctx.config.checks, flags: opts.flags }));
   }
   return results;
 }
@@ -189,6 +189,7 @@ async function cmdRun(a: Args): Promise<number> {
         retag: a.flags.has("retag"),
         dry: a.flags.has("dry-run"),
         keepLocal: a.flags.has("keep-local"),
+        noChecks: a.flags.has("no-checks"),
         platform: flag(a, "platform"),
         echo: true,
         trigger: "manual",
@@ -423,6 +424,7 @@ async function cmdDoctor(): Promise<number> {
     } catch (e) {
       line("fail", (e as Error).message);
     }
+    if (config.checks.length) line("ok", `checks before the build: ${config.checks.map((c) => c.name).join(", ")}`);
     if (config.images.some((img) => img.compression === "zstd")) line(has("zstd") ? "ok" : "fail", "zstd (brew install zstd), needed by compression: zstd");
     for (const img of config.images) {
       for (const file of [img.build_env, img.build_args_file]) {

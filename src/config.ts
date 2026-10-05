@@ -2,7 +2,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isSafeRelative } from "./paths.ts";
 import { DEFAULT_ZSTD_LEVEL } from "./recompress.ts";
-import type { GlobalConfig, ImageSpec, Profile, RepoConfig, Transport } from "./types.ts";
+import type { Check, GlobalConfig, ImageSpec, Profile, RepoConfig, Transport } from "./types.ts";
 
 export class ConfigError extends Error {
   constructor(public problems: string[]) {
@@ -56,6 +56,34 @@ function zstdLevel(v: unknown, where: string, problems: string[]): number | unde
     return undefined;
   }
   return v;
+}
+
+function parseChecks(raw: unknown, problems: string[]): Check[] {
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw)) {
+    problems.push("checks must be a list");
+    return [];
+  }
+  const seen = new Set<string>();
+  const checks: Check[] = [];
+  raw.forEach((item, i) => {
+    const where = `checks[${i}]`;
+    if (!isObj(item)) {
+      problems.push(`${where} must be a mapping`);
+      return;
+    }
+    const name = str(item.name, `${where}.name`, problems, true);
+    const run = str(item.run, `${where}.run`, problems, true);
+    const ttl = item.ttl_hours;
+    if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 1)) problems.push(`${where}.ttl_hours must be a whole number of hours, 1 or more`);
+    if (!name || !run) return;
+    // The name becomes a file name for the stamp, so it stays plain.
+    if (!/^[\w.-]+$/.test(name)) problems.push(`${where}.name may only use letters, digits, '.', '_' and '-'`);
+    if (seen.has(name)) problems.push(`${where}.name '${name}' is used twice`);
+    seen.add(name);
+    checks.push({ name, run, ttl_hours: typeof ttl === "number" ? ttl : 0 });
+  });
+  return checks;
 }
 
 function strList(v: unknown, where: string, problems: string[]): string[] {
@@ -169,6 +197,7 @@ export function parseRepoConfig(text: string): RepoConfig {
 
   const branches = strList(raw.branches, "branches", problems);
   const prefixes = strList(raw.public_prefixes, "public_prefixes", problems);
+  const checks = parseChecks(raw.checks, problems);
   if (problems.length) throw new ConfigError(problems);
   return {
     version: 1,
@@ -177,6 +206,7 @@ export function parseRepoConfig(text: string): RepoConfig {
     branches: branches.length ? branches : ["main"],
     public_prefixes: prefixes.length ? prefixes : DEFAULT_PREFIXES,
     images,
+    checks,
   };
 }
 

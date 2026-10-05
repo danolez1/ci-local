@@ -67,3 +67,21 @@ profiles:
     expect(() => resolveProfile(repo, global)).toThrow(/known: vps, hub/);
   });
 });
+
+const withChecks = (checks: string) => `version: 1\nimages:\n  - image: acme/web\nchecks:\n${checks}`;
+
+test("checks are read with their command and optional expiry", () => {
+  const config = parseRepoConfig(withChecks("  - name: test\n    run: pnpm test\n  - name: scan\n    run: ./scan.sh\n    ttl_hours: 24\n"));
+  expect(config.checks).toEqual([
+    { name: "test", run: "pnpm test", ttl_hours: 0 },
+    { name: "scan", run: "./scan.sh", ttl_hours: 24 },
+  ]);
+  expect(parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n").checks).toEqual([]);
+});
+
+test("a check with a missing command, a repeated or odd name, or a bad expiry is refused", () => {
+  expect(() => parseRepoConfig(withChecks("  - name: test\n"))).toThrow("run is required");
+  expect(() => parseRepoConfig(withChecks("  - name: a\n    run: x\n  - name: a\n    run: y\n"))).toThrow("used twice");
+  expect(() => parseRepoConfig(withChecks("  - name: ../x\n    run: y\n"))).toThrow("may only use");
+  expect(() => parseRepoConfig(withChecks("  - name: a\n    run: y\n    ttl_hours: 0\n"))).toThrow("whole number");
+});

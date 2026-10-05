@@ -73,7 +73,13 @@ images:
     tag_include: []             # if set, only these paths decide the tag
     # compression: zstd        # default gzip; zstd layers are roughly a third smaller
     # zstd_level: 19            # 1 to 22, default 19
+checks:                         # optional, run on this machine before anything is built
+  - name: test
+    run: pnpm test              # a shell command run in the repository root
+    # ttl_hours: 24             # how long a pass counts for the same tree; default until the tree changes
 ```
+
+`checks` are commands the repository wants green before an image exists, usually its tests. They run in the repository root on your machine (so they can reach a local test database), in order, before docker or the registry tunnel is opened, and a failing one stops the run and with it the push. A pass is remembered for the tree it ran on in ci-local's state folder, so pushing the same content again, or a second image from the same commit, skips it. The pass is only remembered when the checked-out commit is the one being built and tracked files have no edits; otherwise the check runs and says so in the log. Checks apply to the branches listed in `branches`. `ci-local run --no-checks` skips them for a manual run. They are code from your own repository, like a git hook.
 
 `compression: zstd` exports the image as an OCI layout instead of loading it into Docker, recompresses each layer with the `zstd` CLI (`brew install zstd`) and pushes that. In a real 1.15 GB Next.js image it cut the upload from 601.7 MB to 406.3 MB at level 19. Recompressed layers are cached by content under the state directory for 14 days, so only changed layers are compressed again, and the push skips layers the registry already has. The server that pulls the image needs Docker Engine 23 or newer (or containerd 1.5 or newer). The image is pushed with an OCI manifest, so a registry that refuses Docker v2 manifests accepts it. `--keep-local` has no effect because the image never enters the local daemon.
 
@@ -88,7 +94,7 @@ ci-local install-hook --kind githooks # .githooks/pre-push and core.hooksPath=.g
 ci-local install-hook --remove
 ```
 
-It appends one marked block at the very end of the hook, so the image build is the last gate before git pushes. Nothing is added above your existing steps. Running the install again moves the block back to the last line if someone appended a step after it, and `doctor` fails when it is not last, when the hook is not a shell script, or when a top-level `exit` comes before the block.
+It appends one marked block at the very end of the hook, so the image build is the last gate before git pushes. The order of a push to a configured branch is: your own hook steps, then ci-local (the repository's checks, the build, publishing the image to the registry, moving `:prod`), and only after all of that git sends the commits to the remote. Publishing the image is not the git push; that always comes last. Nothing is added above your existing steps. Running the install again moves the block back to the last line if someone appended a step after it, and `doctor` fails when it is not last, when the hook is not a shell script, or when a top-level `exit` comes before the block.
 
 The pushed refs reach ci-local from stdin. Husky hooks that already read stdin into a `refs` variable get that variable replayed; if neither is available it builds the checked-out branch when that branch is listed in `branches`. An existing `core.hooksPath` is left alone and the hook is written where it points.
 

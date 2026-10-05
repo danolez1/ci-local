@@ -165,3 +165,62 @@ zstdTest("an image set to zstd is exported as an OCI layout, recompressed, and p
   expect(log()).not.toContain("docker save");
   expect(log()).toMatch(/crane push -v .*image-oci reg\.test:5000\/acme\/web:sha-[0-9a-f]{12}/);
 });
+
+const checkYaml = (name: string, run: string) => `version: 1\nbranches: [main]\nimages:\n  - image: acme/web\nchecks:\n  - name: ${name}\n    run: ${run}\n`;
+const checkRuns = (): number => {
+  try {
+    return readFileSync(join(base, "checks.log"), "utf8").trim().split("\n").filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+};
+
+test("a check runs before the build, and the same tree is not checked twice", async () => {
+  env.CHECK_LOG = join(base, "checks.log");
+  writeFileSync(join(repo, "ci-local.yaml"), checkYaml("gate", "echo ran >> \"$CHECK_LOG\""));
+  writeFileSync(join(repo, "gate.txt"), "one\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "gate");
+  writeFileSync(calls, "");
+  expect((await push()).code).toBe(0);
+  expect(checkRuns()).toBe(1);
+  // The same content under a new commit keeps its tree, so the pass is reused.
+  await gitc("commit", "--allow-empty", "-qm", "same tree");
+  expect((await push()).code).toBe(0);
+  expect(checkRuns()).toBe(1);
+  writeFileSync(join(repo, "gate.txt"), "two\n");
+  await gitc("commit", "-qam", "changed tree");
+  expect((await push()).code).toBe(0);
+  expect(checkRuns()).toBe(2);
+});
+
+test("a failing check stops the build and the push", async () => {
+  writeFileSync(join(repo, "ci-local.yaml"), checkYaml("broken", "echo nope; exit 3"));
+  await gitc("commit", "-qam", "broken check");
+  writeFileSync(calls, "");
+  const before = (await must(["git", "-C", remote, "rev-parse", "main"])).trim();
+  const r = await push();
+  expect(r.code).not.toBe(0);
+  expect(log()).not.toContain("buildx build");
+  expect((await must(["git", "-C", remote, "rev-parse", "main"])).trim()).toBe(before);
+});
+
+test("a pass from a working tree that differs from the commit is not remembered", async () => {
+  writeFileSync(join(repo, "ci-local.yaml"), checkYaml("dirtycheck", "echo ran >> \"$CHECK_LOG\""));
+  await gitc("commit", "-qam", "dirty check");
+  const base1 = checkRuns();
+  writeFileSync(join(repo, "gate.txt"), "uncommitted edit\n");
+  expect((await push()).code).toBe(0);
+  expect((await push()).code).toBe(0);
+  expect(checkRuns()).toBe(base1 + 2);
+  await gitc("checkout", "--", "gate.txt");
+});
+
+test("--no-checks skips them for a manual run", async () => {
+  writeFileSync(join(repo, "ci-local.yaml"), checkYaml("skipme", "echo ran >> \"$CHECK_LOG\""));
+  await gitc("commit", "-qam", "skip check");
+  const before = checkRuns();
+  const r = await exec(["ci-local", "run", "--no-push", "--no-checks"], { cwd: repo, env });
+  expect(r.code, r.err).toBe(0);
+  expect(checkRuns()).toBe(before);
+});

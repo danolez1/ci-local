@@ -33,6 +33,14 @@ export interface ImageSpec {
   tag_exclude: string[];
 }
 
+export interface Check {
+  name: string;
+  /** A shell command run in the repository root, on this machine, before anything is built. */
+  run: string;
+  /** Hours a pass stays valid for the same tree; 0 means until the tree changes. */
+  ttl_hours: number;
+}
+
 export interface RepoConfig {
   version: 1;
   profile?: string;
@@ -40,6 +48,7 @@ export interface RepoConfig {
   branches: string[];
   public_prefixes: string[];
   images: ImageSpec[];
+  checks: Check[];
 }
 
 export type RunStatus = "running" | "success" | "skipped" | "failed" | "dry-run" | "interrupted";

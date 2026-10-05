@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { runChecks } from "./checks.ts";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
 import { exec, has, killChildren, must, setProxyMode } from "./exec.ts";
@@ -9,7 +10,7 @@ import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { recompressLayers } from "./recompress.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
-import type { ImageSpec, Profile, RunRecord } from "./types.ts";
+import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
 export interface RunFlags {
   push: boolean;
@@ -17,6 +18,7 @@ export interface RunFlags {
   retag: boolean;
   dry: boolean;
   keepLocal: boolean;
+  noChecks?: boolean;
   platform?: string;
   echo: boolean;
   ref?: string;
@@ -30,6 +32,7 @@ interface RunInput {
   profileName: string;
   profile: Profile;
   publicPrefixes: string[];
+  checks: Check[];
   flags: RunFlags;
 }
 
@@ -96,10 +99,14 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
     });
 
     if (flags.dry) {
+      if (input.checks.length && !flags.noChecks) run.say(`dry run: would run checks ${input.checks.map((c) => c.name).join(", ")}`);
       run.say(`dry run: would publish ${spec.image}:${tag}`);
       run.finish("dry-run");
       return run.record;
     }
+
+    // Before docker and the tunnel are opened, so a long test run never holds a connection idle.
+    if (!flags.noChecks) await runChecks(run, root, sha, input.checks);
 
     await run.phase("docker", async () => {
       if ((await exec(["docker", "info"])).code !== 0) throw new Error("docker is not running (start OrbStack or Docker Desktop)");
