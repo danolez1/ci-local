@@ -6,7 +6,7 @@ When you push a configured branch, the hook builds the commit you are pushing, p
 
 ## Install
 
-You need [Bun](https://bun.sh), `docker` (OrbStack or Docker Desktop) and [crane](https://github.com/google/go-containerregistry/tree/main/cmd/crane) (`brew install crane`). The ssh transport also needs an ssh alias for your server.
+You need [Bun](https://bun.sh), `docker` (OrbStack or Docker Desktop) and [crane](https://github.com/google/go-containerregistry/tree/main/cmd/crane) (`brew install crane`). The ssh transport also needs an ssh alias for your server, and `compression: zstd` needs the `zstd` command (`brew install zstd`).
 
 ```sh
 npm install -g github:danolez1/ci-local        # puts `ci-local` on PATH
@@ -112,7 +112,7 @@ The stdin job is YAML or JSON with `repo` (a leading `~` works), `sha`, `images`
 
 ## Watching runs
 
-Each run writes a record (`run.json`) and a log under `~/.local/state/ci-local/runs/` (`$CI_LOCAL_STATE_DIR` moves it). The record has the image, sha, branch, tag, trigger (`hook` or `manual`), status, per-phase timings, the deploy image once it is published, and the pid of the process running it. A run whose process was killed shows as `interrupted`. The log marks each phase as a group, which the web view folds.
+Each run writes a record (`run.json`) and a log under `~/.local/state/ci-local/runs/` (`$CI_LOCAL_STATE_DIR` moves it). The record has the image, sha, branch, tag, trigger (`hook` or `manual`), status, per-phase timings, the deploy image once it is published, and the pid of the process running it. A run whose process was killed shows as `interrupted`. The log marks each phase as a group, which the web view folds. While an image is pushing, the log gets a line for each finished layer and a status line every 15 seconds (bytes sent, rate, layers done), and the record's `push` field holds the same numbers.
 
 ```sh
 ci-local status                  # recent runs
@@ -132,6 +132,15 @@ The web view has paged, filterable run lists (status, repository, search), a run
 - The image is built from `git archive <sha>`, the files a clone would see. Untracked and ignored files never reach it, so a build that depends on a local-only file fails on your machine first.
 - The tag is `sha-` plus a hash of the committed files that can change the image (everything minus `tag_exclude`, or only `tag_include`), the platform and the Dockerfile path. A commit that changes nothing relevant finds its tag already in the registry and skips the build.
 - `build_env`, `build_env_local` and `build_args_file` may only hold public values. Every key needs a public prefix (`NEXT_PUBLIC_`, `VITE_`, `PUBLIC_`, `NUXT_PUBLIC_`, `EXPO_PUBLIC_` by default), and values matching common credential formats (Stripe, GitHub, Slack and AWS keys, private key blocks, JWTs, `sk-` keys) are refused. That is a pattern check, not proof a value is safe. Secrets stay in the deploy platform's environment.
+
+## Registry notes
+
+Large images expose limits that a small test never hits.
+
+- **Per-request time limits.** zot v2.1.21 answers a layer upload that lasts over 60 seconds with a 500 `i/o timeout`, even while bytes are flowing, and crane reports it as `EOF` or `use of closed network connection`. Set `http.readTimeout` and `http.writeTimeout` (for example `30m`) in zot's `config.json`. A registry behind a CDN has its own request-body cap, which is why the `ssh` transport goes to the registry directly.
+- **Config changes need a restart.** A redeploy from git updated the bind-mounted `config.json` on the server without restarting the zot container, so the old settings stayed live. Restart the container after changing the file and check its start time.
+- **Docker v2 manifests.** crane pushes a `docker save` tarball with a Docker v2 manifest. zot v2.1.21 refuses it with 415 (crane shows `MANIFEST_INVALID`) unless `http.compat` lists `docker2s2`. Images with `compression: zstd` are pushed with an OCI manifest and do not need that setting.
+- **Slow links.** A first push of a large image takes as long as the upload, so watch it in the web view. Later pushes only send the layers that changed, so keep rarely changing layers (dependencies, base packages) before frequently changing ones in the Dockerfile and avoid `chown -R` or `chmod -R` on a copied tree, which stores every file a second time.
 
 ## Deploying
 

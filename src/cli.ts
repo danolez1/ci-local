@@ -423,6 +423,7 @@ async function cmdDoctor(): Promise<number> {
     } catch (e) {
       line("fail", (e as Error).message);
     }
+    if (config.images.some((img) => img.compression === "zstd")) line(has("zstd") ? "ok" : "fail", "zstd (brew install zstd), needed by compression: zstd");
     for (const img of config.images) {
       for (const file of [img.build_env, img.build_args_file]) {
         if (!file) continue;
