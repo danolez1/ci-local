@@ -4,6 +4,18 @@ Build container images on your own machine and publish them to a registry from a
 
 When you push a configured branch, the hook builds the commit you are pushing, publishes it as `sha-<hash>`, moves `:prod`, and only then lets the push go. If the build fails, the push stops.
 
+## What it looks like
+
+`ci-local ui` is a local web view of every run: filters, an Actions menu per run, light and dark themes.
+
+![The runs list with the Actions menu open](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/runs-list.png)
+
+A run page shows the phases (checks, build, compress, push) with their log, and while an image uploads, the layers done, bytes sent and rate. Stop and Delete are on the page.
+
+![A run in its push phase with the upload progress bar](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/run-push.png)
+
+![The runs list in the dark theme](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/runs-dark.png)
+
 ## Install
 
 You need [Bun](https://bun.sh), `docker` (OrbStack or Docker Desktop) and [crane](https://github.com/google/go-containerregistry/tree/main/cmd/crane) (`brew install crane`). The ssh transport also needs an ssh alias for your server, and `compression: zstd` needs the `zstd` command (`brew install zstd`).

@@ -1,18 +1,51 @@
 {
   "name": "ci-local",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Build container images on your own machine and publish them to a registry from a git pre-push hook",
   "type": "module",
   "license": "MIT",
   "author": "danolez",
-  "repository": { "type": "git", "url": "git+https://github.com/danolez1/ci-local.git" },
-  "keywords": ["docker", "ci", "pre-push", "husky", "registry", "dokploy", "self-hosted"],
-  "bin": { "ci-local": "bin/ci-local.mjs" },
-  "files": ["bin", "src", "examples", "README.md", "LICENSE"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/danolez1/ci-local.git"
+  },
+  "homepage": "https://github.com/danolez1/ci-local#readme",
+  "bugs": {
+    "url": "https://github.com/danolez1/ci-local/issues"
+  },
+  "keywords": [
+    "docker",
+    "ci",
+    "pre-push",
+    "husky",
+    "registry",
+    "zot",
+    "dokploy",
+    "self-hosted",
+    "zstd",
+    "local-ci"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "ci-local": "bin/ci-local.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "examples",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "test": "bun test --timeout 60000",
     "typecheck": "tsc --noEmit",
-    "build": "bun build --compile src/cli.ts --outfile dist/ci-local"
+    "build": "bun build --compile src/cli.ts --outfile dist/ci-local",
+    "prepublishOnly": "bun test --timeout 60000 && tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "latest",
