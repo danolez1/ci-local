@@ -106,7 +106,8 @@ export async function recompressLayers(dir: string, level: number, cacheDir: str
     if (layer.mediaType !== OCI_TAR) throw new Error(`unexpected layer type ${layer.mediaType}; the build must export uncompressed layers`);
     const source = blobPath(dir, layer.digest);
     const out = await zstdBlob(source, layer, level, cacheDir, onLine);
-    copyFileSync(out.file, blobPath(dir, out.digest));
+    // Two layers with the same content share one blob, and the copy of a cached read-only file cannot be overwritten.
+    if (!existsSync(blobPath(dir, out.digest))) copyFileSync(out.file, blobPath(dir, out.digest));
     rmSync(source, { force: true });
     if (out.cached) stats.cached++;
     else stats.compressed++;

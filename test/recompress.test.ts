@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { has, must } from "../src/exec.ts";
@@ -51,6 +51,15 @@ zstdTest("a layer compressed before is reused, not compressed again", async () =
   makeOciLayout(join(base, "second"), ["same layer ".repeat(5_000), "second only ".repeat(5_000)]);
   const stats = await recompressLayers(join(base, "second"), 3, cache, () => {});
   expect(stats).toMatchObject({ compressed: 1, cached: 1 });
+});
+
+zstdTest("an image with two identical layers still converts", async () => {
+  const dir = join(base, "twins");
+  const { layerDigests } = makeOciLayout(dir, ["twin layer ".repeat(5_000), "twin layer ".repeat(5_000)]);
+  // BuildKit exports its layer blobs read-only, and zstd gives its output the same mode.
+  chmodSync(blob(dir, layerDigests[0] as string), 0o444);
+  const stats = await recompressLayers(dir, 3, join(base, "cache-twins"), () => {});
+  expect(stats.compressed + stats.cached).toBe(2);
 });
 
 test("layers of an unexpected type are refused instead of pushed half converted", async () => {
