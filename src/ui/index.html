@@ -35,6 +35,9 @@
   }
   * { box-sizing: border-box; }
   html { color-scheme: light dark; }
+  /* A fixed theme must pin native controls too, or checkboxes follow the OS and turn black in forced light. */
+  html[data-theme="light"] { color-scheme: light; }
+  html[data-theme="dark"] { color-scheme: dark; }
   @font-face { font-family: Urbanist; src: url("/fonts/Urbanist.ttf") format("truetype"); font-weight: 100 900; font-style: normal; font-display: swap; }
   :root { --sans: Urbanist, system-ui, -apple-system, "Segoe UI", sans-serif; --mono: Menlo, Monaco, "SF Mono", ui-monospace, Consolas, monospace; --log-size: 13px; --log-leading: 1.3; }
   body { margin: 0; background: var(--canvas); color: var(--fg); font: 15px/1.5 var(--sans); }
