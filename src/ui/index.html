@@ -185,6 +185,12 @@
   .row .act { align-self: center; }
   .row .act summary { height: 28px; padding: 0 8px; font-size: 12px; }
   .runacts { display: flex; gap: 8px; }
+  .row .sel { flex: none; align-self: center; display: flex; padding: 6px 4px 6px 0; margin: -6px 0; user-select: none; cursor: default; }
+  .row .sel input, .bulk input[type=checkbox] { width: 16px; height: 16px; margin: 0; cursor: pointer; accent-color: var(--accent); }
+  .row.picked, .row.picked:hover { background: var(--accent-subtle); }
+  .bulk .allck { display: inline-flex; align-items: center; gap: 12px; cursor: pointer; user-select: none; }
+  .bulk .acts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .bulk .acts[hidden] { display: none; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: #24292f; color: #fff; padding: 8px 16px; border-radius: 6px; z-index: 50; box-shadow: var(--shadow); }
 </style>
 </head>
@@ -223,8 +229,8 @@
 ci-local run --background        same, detached; follow it here
 ci-local status                  recent runs
 ci-local logs -f                 follow the newest log
-ci-local ui start                keep this view running in the background
-ci-local ui stop                 stop it
+ci-local ui                      start this view in the background
+ci-local ui-stop                 stop it
 ci-local ui install              start it at login (macOS)
 ci-local doctor                  check tools, config and hook</pre></div></dialog>
 
@@ -339,6 +345,7 @@ function rowHtml(r) {
   sub.push(esc(r.repo), esc(r.profile));
   if (r.trigger) sub.push(r.trigger === "hook" ? "pre-push" : "manual");
   return `<div class="row" role="link" data-id="${esc(r.id)}" tabindex="0">
+    <div class="sel"><input type="checkbox" class="rowck" aria-label="Select run"></div>
     <div class="ic">${icon(r.status)}</div>
     <div class="main"><div class="title">${esc(r.image)}</div><div class="sub">${sub.join(" · ")}</div></div>
     <div class="side"><span>${r.status === "running" ? dur(r.started) : r.ended ? dur(r.started, r.ended) : "-"}</span><span title="${esc(tip(r.started))}">${ago(r.started)}</span></div>
@@ -361,12 +368,78 @@ function pagerHtml(page, pages, p) {
 }
 const STATUSES = ["running", "success", "failed", "skipped", "interrupted", "dry-run"];
 
+/* A poll re-renders the whole list, so the selection lives outside the DOM. */
+const selected = new Set();
+let selKey = null, lastToggled = null, pageStatus = new Map(), bulkBusy = false;
+const pageIds = () => [...pageStatus.keys()];
+function resetSelection(key) { selected.clear(); lastToggled = null; selKey = key; }
+const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+const bulkTargets = (action) => [...selected].filter((id) => (pageStatus.get(id) === "running") === (action === "stop"));
+
+function bulkBarHtml() {
+  return `<div class="box-head bulk"><label class="allck"><input type="checkbox" id="ckAll" aria-label="Select all runs on this page"><span id="selLabel">Select all</span></label>
+    <div class="acts" id="bulkActs" hidden><button class="hbtn danger" id="bulkStop">${ICON_STOP}<span></span></button><button class="hbtn" id="bulkDel">${ICON_TRASH}<span></span></button><a href="#" id="bulkClear">Clear</a></div></div>`;
+}
+function syncSelection() {
+  const ids = pageIds(), onPage = ids.filter((id) => selected.has(id)).length;
+  for (const row of $$("#view .row")) {
+    const on = selected.has(row.dataset.id);
+    row.classList.toggle("picked", on);
+    $(".rowck", row).checked = on;
+  }
+  const all = $("#ckAll");
+  if (!all) return;
+  all.checked = onPage > 0 && onPage === ids.length;
+  all.indeterminate = onPage > 0 && onPage < ids.length;
+  $("#selLabel").textContent = selected.size ? `${selected.size} selected` : "Select all";
+  $("#bulkActs").hidden = selected.size === 0;
+  for (const [id, action, label, verb] of [["bulkStop", "stop", "Stop", "running"], ["bulkDel", "delete", "Delete", "finished"]]) {
+    const n = bulkTargets(action).length, b = $("#" + id);
+    $("span", b).textContent = `${label} (${n})`;
+    b.disabled = n === 0 || bulkBusy;
+    b.title = n ? `${label} the ${plural(n, "selected " + verb + " run")}` : `None of the selected runs is ${verb}`;
+  }
+}
+function toggleRow(id, shift) {
+  const want = !selected.has(id), set = (x) => (want ? selected.add(x) : selected.delete(x));
+  const ids = pageIds(), a = ids.indexOf(lastToggled), b = ids.indexOf(id);
+  if (shift && a !== -1 && b !== -1) ids.slice(Math.min(a, b), Math.max(a, b) + 1).forEach(set);
+  else set(id);
+  lastToggled = id;
+  syncSelection();
+}
+function clearSelection() { resetSelection(selKey); syncSelection(); }
+async function bulkRun(action) {
+  const ids = bulkTargets(action);
+  if (!ids.length || bulkBusy) return;
+  const stop = action === "stop";
+  if (!confirm(stop ? `Stop ${plural(ids.length, "run")}? A push waiting on one will fail.` : `Delete ${plural(ids.length, "run")} and their logs?`)) return;
+  bulkBusy = true; syncSelection();
+  try {
+    const res = await fetch("/api/runs/bulk", { method: "POST", headers: { "x-ci-local": "1", "content-type": "application/json" }, body: JSON.stringify({ action, ids }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) toast(body.error || "Request failed");
+    else {
+      if (!stop) for (const r of body.results) if (r.result === "done") selected.delete(r.id);
+      const { done, failed } = body.summary;
+      toast(`${stop ? "Stopping" : "Deleted"} ${plural(done, "run")}${failed ? `, ${failed} skipped` : ""}`);
+    }
+  } catch { toast("Request failed"); }
+  bulkBusy = false;
+  tick(true);
+}
+
 async function renderRuns(force) {
   const p = { page: route.q.get("page") || "", status: route.q.get("status") || "", repo: route.q.get("repo") || "", image: route.q.get("image") || "", q: route.q.get("q") || "" };
   const url = `/api/runs?page=${p.page || 1}&per_page=${settings.perPage}&status=${encodeURIComponent(p.status)}&repo=${encodeURIComponent(p.repo)}&image=${encodeURIComponent(p.image)}&q=${encodeURIComponent(p.q)}`;
   const hadFocus = document.activeElement?.id === "q";
   const { unchanged, data } = await api(url);
   if (unchanged && !force && $("#view .layout")) return;
+  const key = JSON.stringify([p, settings.perPage]);
+  if (key !== selKey) resetSelection(key);
+  pageStatus = new Map(data.items.map((r) => [r.id, r.status]));
+  for (const id of [...selected]) if (!pageStatus.has(id)) selected.delete(id);
+  if (!pageStatus.has(lastToggled)) lastToggled = null;
   renderTabs(data.repos.reduce((n, r) => n + r.count, 0));
   const total = data.repos.reduce((n, r) => n + r.count, 0);
   const none = { ...p, repo: "", image: "", page: "" };
@@ -384,12 +457,20 @@ async function renderRuns(force) {
       <div class="search">${ICON_SEARCH}<input id="q" type="search" placeholder="Search image, sha, tag, branch" value="${esc(p.q)}" autocomplete="off"></div>
       <div class="grow"></div>
       <details class="dd"><summary>Status${p.status ? ": " + esc(p.status) : ""} &#9662;</summary><div class="pop"><div class="ttl">Filter by status</div>${statusItems}</div></details>
-    </div>${list}
+    </div>${data.items.length ? bulkBarHtml() : ""}${list}
     <div class="foot"><span>${data.total ? `${from}-${to} of ${data.total} runs` : "0 runs"}</span>
       <label>Rows per page <select id="pp">${[10, 25, 50, 100].map((n) => `<option ${n === settings.perPage ? "selected" : ""}>${n}</option>`).join("")}</select></label></div></div>
     ${pagerHtml(data.page, data.pages, p)}</section></div>`;
-  $$("#view .row").forEach((el) => { el.onclick = (e) => { if (!e.target.closest(".act")) location.hash = "#/runs/" + el.dataset.id; }; el.onkeydown = (e) => e.key === "Enter" && e.target === el && el.click(); });
+  $$("#view .row").forEach((el) => { el.onclick = (e) => { if (!e.target.closest(".act, .sel")) location.hash = "#/runs/" + el.dataset.id; }; el.onkeydown = (e) => e.key === "Enter" && e.target === el && el.click(); });
   bindControls($("#view"));
+  for (const cell of $$("#view .row .sel")) cell.onclick = (e) => { toggleRow(cell.parentElement.dataset.id, e.shiftKey); };
+  if ($("#ckAll")) {
+    $("#ckAll").onclick = () => { lastToggled = null; const ids = pageIds(), every = ids.every((id) => selected.has(id)); for (const id of ids) every ? selected.delete(id) : selected.add(id); syncSelection(); };
+    $("#bulkStop").onclick = () => bulkRun("stop");
+    $("#bulkDel").onclick = () => bulkRun("delete");
+    $("#bulkClear").onclick = (e) => { e.preventDefault(); clearSelection(); };
+  }
+  syncSelection();
   $$("#view [data-status]").forEach((b) => (b.onclick = () => (location.hash = runsUrl({ ...p, status: b.dataset.status, page: "" }))));
   const q = $("#q"); let t;
   q.oninput = () => { clearTimeout(t); t = setTimeout(() => (location.hash = runsUrl({ ...p, q: q.value.trim(), page: "" })), 300); };
@@ -650,6 +731,7 @@ document.addEventListener("keydown", (e) => {
 /* loop */
 async function tick(force) {
   route = parseRoute();
+  if (route.name !== "runs") resetSelection(null);
   try {
     if (route.name === "run") await renderRun(force);
     else { cur = null; if (route.name === "repos") await renderRepos(force); else await renderRuns(force); }

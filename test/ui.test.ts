@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { launchAgentPlist } from "../src/daemon.ts";
 import { exec, must } from "../src/exec.ts";
-import { queryRuns, readLog, readRun, RunHandle, runStats } from "../src/store.ts";
+import { queryRuns, readLog, readRun, RunHandle, runStats, stopRun } from "../src/store.ts";
 import { startUi } from "../src/ui/server.ts";
 
 const cli = join(import.meta.dir, "..", "bin", "ci-local.mjs");
@@ -252,4 +252,133 @@ test("stopping signals only a process that is plainly ci-local", async () => {
     foreign.kill();
     ours.kill();
   }
+});
+
+const bulk = (body: unknown, headers: Record<string, string> = {}) =>
+  fetch(`http://${host}/api/runs/bulk`, { method: "POST", headers: { host, "x-ci-local": "1", "content-type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) });
+
+function finished(repo: string, status: "success" | "failed" = "success"): string {
+  const run = RunHandle.create({ repo_path: `/work/${repo}`, image: `${repo}/web`, sha: "9".repeat(40), profile: "p", echo: false });
+  run.finish(status);
+  return run.record.id;
+}
+
+test("bulk delete removes the finished runs and leaves a running one alone", async () => {
+  const gone = [finished("bulkdel"), finished("bulkdel", "failed"), finished("bulkdel")];
+  const live = RunHandle.create({ repo_path: "/work/bulkdel", image: "bulkdel/web", sha: "9".repeat(40), profile: "p", echo: false });
+  const res = await bulk({ action: "delete", ids: [...gone, live.record.id, "no-such-run"] });
+  expect(res.status).toBe(200);
+  const body = (await res.json()) as { results: Array<{ id: string; result: string }>; summary: unknown };
+  expect(body.summary).toEqual({ requested: 5, done: 3, failed: 2 });
+  expect(Object.fromEntries(body.results.map((r) => [r.id, r.result]))).toEqual({ [gone[0] as string]: "done", [gone[1] as string]: "done", [gone[2] as string]: "done", [live.record.id]: "running", "no-such-run": "missing" });
+  for (const id of gone) expect(readRun(id)).toBeNull();
+  expect(readRun(live.record.id)).not.toBeNull();
+  expect(queryRuns({ repo: "bulkdel" }).total).toBe(1);
+});
+
+test("bulk stop signals only runs that are ci-local processes, and reports the rest per id", async () => {
+  const foreign = Bun.spawn(["sleep", "30"]);
+  const ours = Bun.spawn(["sh", "-c", "sleep 5; true", "cli.ts"]);
+  try {
+    const mk = (pid?: number): string => {
+      const run = RunHandle.create({ repo_path: "/work/bulkstop", image: "bulkstop/web", sha: "8".repeat(40), profile: "p", echo: false });
+      if (pid !== undefined) run.record.pid = pid;
+      run.set({});
+      return run.record.id;
+    };
+    const [a, b, c] = [mk(ours.pid), mk(foreign.pid), finished("bulkstop")];
+    const res = await bulk({ action: "stop", ids: [a, b, c] });
+    const body = (await res.json()) as { results: Array<{ id: string; result: string }>; summary: unknown };
+    expect(res.status).toBe(200);
+    expect(body.results).toEqual([{ id: a, result: "done" }, { id: b, result: "foreign" }, { id: c, result: "not-running" }]);
+    expect(body.summary).toEqual({ requested: 3, done: 1, failed: 2 });
+    expect(await ours.exited).not.toBe(0);
+    expect(foreign.killed).toBe(false);
+  } finally {
+    foreign.kill();
+    ours.kill();
+  }
+});
+
+test("bulk refuses a malformed request without touching any run", async () => {
+  const keep = finished("bulkbad");
+  expect((await bulk({ action: "delete", ids: [keep, "../etc"] })).status).toBe(400);
+  expect((await bulk({ action: "delete", ids: [keep, "has space"] })).status).toBe(400);
+  expect((await bulk({ action: "delete", ids: [keep, 7] })).status).toBe(400);
+  expect((await bulk({ action: "delete", ids: [] })).status).toBe(400);
+  expect((await bulk({ action: "delete", ids: keep })).status).toBe(400);
+  expect((await bulk({ action: "purge", ids: [keep] })).status).toBe(400);
+  expect((await bulk("not json")).status).toBe(400);
+  expect((await bulk(null)).status).toBe(400);
+  expect(readRun(keep)).not.toBeNull();
+});
+
+test("bulk caps the list at 200 ids and counts a repeated id once", async () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `missing-${i}`);
+  expect((await bulk({ action: "delete", ids: ids(201) })).status).toBe(413);
+  const ok = await bulk({ action: "delete", ids: ids(200) });
+  expect(ok.status).toBe(200);
+  expect(((await ok.json()) as { summary: { requested: number } }).summary.requested).toBe(200);
+  const id = finished("bulkdup");
+  const dup = (await (await bulk({ action: "delete", ids: [id, id] })).json()) as { results: unknown[]; summary: unknown };
+  expect(dup.results).toHaveLength(1);
+  expect(dup.summary).toEqual({ requested: 1, done: 1, failed: 0 });
+});
+
+test("bulk needs the same origin and the marker header, and only accepts POST", async () => {
+  const id = finished("bulkauth");
+  const body = JSON.stringify({ action: "delete", ids: [id] });
+  const bare = await fetch(`http://${host}/api/runs/bulk`, { method: "POST", headers: { host, "content-type": "application/json" }, body });
+  expect(bare.status).toBe(403);
+  expect((await bulk({ action: "delete", ids: [id] }, { origin: "http://evil.test" })).status).toBe(403);
+  expect((await fetch(`http://${host}/api/runs/bulk`, { method: "POST", headers: { host: "evil.test", "x-ci-local": "1" }, body })).status).toBe(403);
+  expect((await fetch(`http://${host}/api/runs/bulk`, { method: "GET", headers: { host, "x-ci-local": "1" } })).status).toBe(405);
+  expect(readRun(id)).not.toBeNull();
+  expect((await bulk({ action: "delete", ids: [id] }, { origin: `http://${host}` })).status).toBe(200);
+  expect(readRun(id)).toBeNull();
+});
+
+test("ui with no subcommand starts the background server, a second call reuses it, and ui-stop ends it", async () => {
+  const env = { CI_LOCAL_STATE_DIR: join(base, "bare-ui-state") };
+  mkdirSync(env.CI_LOCAL_STATE_DIR, { recursive: true });
+  const run = (...args: string[]) => exec([cli, ...args], { env });
+  let url = "";
+  try {
+    expect((await run("ui-stop")).out).toContain("not running");
+    const first = await run("ui", "--port", "0");
+    expect(first.code).toBe(0);
+    expect(first.out).toMatch(/web view running on http:\/\/127\.0\.0\.1:\d+ \(pid \d+\); stop it with: ci-local ui-stop/);
+    url = first.out.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0] as string;
+    expect((await fetch(`${url}/api/info`)).ok).toBe(true);
+    const second = await run("ui", "--port", "0");
+    expect(second.code).toBe(0);
+    expect(second.out).toContain(url);
+    expect(second.out.match(/pid (\d+)/)?.[1]).toBe(first.out.match(/pid (\d+)/)?.[1]);
+    const stopped = await run("ui-stop");
+    expect(stopped.code).toBe(0);
+    expect(stopped.out).toContain("stopped");
+    expect((await run("ui", "status")).code).toBe(1);
+    await expect(fetch(`${url}/api/info`)).rejects.toThrow();
+  } finally {
+    await run("ui-stop");
+  }
+}, 60000);
+
+test("ui names the port when it cannot start because the port is taken", async () => {
+  const env = { CI_LOCAL_STATE_DIR: join(base, "busy-ui-state") };
+  mkdirSync(env.CI_LOCAL_STATE_DIR, { recursive: true });
+  const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("x") });
+  try {
+    const r = await exec([cli, "ui", "--port", String(taken.port)], { env });
+    expect(r.code).toBe(1);
+    expect(r.err).toContain(`port ${taken.port} is in use`);
+  } finally {
+    taken.stop(true);
+  }
+}, 60000);
+
+test("stop never signals the server's own process, even if a stale record names it", () => {
+  const run = RunHandle.create({ repo_path: "/work/self", image: "self/web", sha: "7".repeat(40), profile: "p", echo: false });
+  expect(run.record.pid).toBe(process.pid);
+  expect(stopRun(run.record.id)).toBe("foreign");
 });

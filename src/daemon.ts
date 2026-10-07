@@ -1,4 +1,4 @@
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -75,6 +75,7 @@ export async function startDaemon(port: number): Promise<DaemonInfo> {
   const running = readDaemon();
   if (running) return running;
   mkdirSync(stateHome(), { recursive: true });
+  const logFrom = existsSync(uiLogFile()) ? statSync(uiLogFile()).size : 0;
   const log = openSync(uiLogFile(), "a");
   // A new process group keeps a closed terminal's hangup from reaching the server.
   const child = Bun.spawn([process.execPath, cliPath(), "ui", "serve", "--port", String(port)], {
@@ -93,7 +94,10 @@ export async function startDaemon(port: number): Promise<DaemonInfo> {
     await Bun.sleep(200);
   }
   if (child.exitCode === null) child.kill();
-  throw new Error(`the web view did not start on port ${port}; see ${uiLogFile()}`);
+  // Only this attempt's output counts; an older "in use" line in the append-only log would blame the wrong cause.
+  const lastLine = readFileSync(uiLogFile()).subarray(logFrom).toString().trim().split("\n").pop() ?? "";
+  const reason = /in use/i.test(lastLine) ? `port ${port} is in use` : `it did not start on port ${port}`;
+  throw new Error(`the web view did not start: ${reason}; see ${uiLogFile()}`);
 }
 
 export async function stopDaemon(): Promise<boolean> {

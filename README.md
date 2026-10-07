@@ -6,7 +6,7 @@ When you push a configured branch, the hook builds the commit you are pushing, p
 
 ## What it looks like
 
-`ci-local ui` is a local web view of every run: filters, an Actions menu per run, light and dark themes.
+`ci-local ui` starts a local web view of every run in the background: filters, an Actions menu per run, bulk select, light and dark themes.
 
 ![The runs list with the Actions menu open](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/runs-list.png)
 
@@ -137,12 +137,20 @@ Each run writes a record (`run.json`) and a log under `~/.local/state/ci-local/r
 ci-local status                  # recent runs
 ci-local logs -f                 # follow the newest log
 ci-local watch                   # live terminal view
-ci-local ui                      # web view in this terminal, http://127.0.0.1:7777
-ci-local ui start --open         # run the web view in the background and open it
+ci-local ui                      # start the web view in the background and return, http://127.0.0.1:7777
+ci-local ui-stop                 # stop it (same as ci-local ui stop)
+ci-local ui serve                # run the web view in this terminal instead (ctrl-c stops it)
+ci-local ui start --open         # same as ci-local ui, and open the browser
 ci-local ui status | stop | restart | logs
 ci-local ui install              # start it at login (macOS LaunchAgent); ui uninstall removes it
 ci-local run --background        # build detached from the terminal; prints the run id to follow
 ```
+
+Running `ci-local ui` while one is already up prints its address and changes nothing. If the login service is installed, `ui-stop` stops the server but the service starts it again; remove it with `ci-local ui uninstall`.
+
+To stop or delete many runs at once, tick the checkboxes in the web view's list. The header box selects the page and shift-click selects a range. The bar that appears shows how many selected runs Stop (the running ones) and Delete (the finished ones) will touch, and each asks once before acting. The selection clears when you change page or filter.
+
+The bar calls `POST /api/runs/bulk` with `{"action": "stop" | "delete", "ids": [...]}`, at most 200 ids. It applies the same checks as the single-run routes and answers with a result per id.
 
 The web view has paged, filterable run lists (status, repository, search), a run page with phases and a filterable log, a repositories page with success rate and median build time, light, dark and system themes, and keyboard shortcuts (`?` lists them). While an image is pushing, the run page shows layers done, bytes sent and the current rate (bytes are counted on the ssh transport only; other transports show layers). Each run has Stop and Delete: the run page shows both buttons, and the list has an Actions menu on every row. Stop signals the ci-local process running it (after checking that the process really is ci-local), which cancels its docker build, upload and ssh tunnel and marks the run failed, and a push waiting on it fails. Delete removes a finished run's record and log. Changes only work from the page's own origin and carry a marker header, so another site open in your browser cannot trigger them, and the server binds to loopback because logs can name internal hosts. The page uses the Urbanist font (SIL Open Font License, copy in `src/ui/fonts/OFL.txt`), served by the tool itself so it works offline, and logs use a terminal monospace stack; the CSS variables `--log-size` and `--log-leading` in the page's `:root` set their size and spacing. `--port` picks another port; the background copy remembers its port in `ui.json` in the state directory.
 

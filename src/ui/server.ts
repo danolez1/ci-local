@@ -1,7 +1,7 @@
 import pkg from "../../package.json" with { type: "json" };
 import urbanist from "./fonts/Urbanist.ttf" with { type: "file" };
 import pageSource from "./index.html" with { type: "text" };
-import { type ControlResult, deleteRun, logPath, queryRuns, readLog, readRun, runStats, stateHome, stopRun } from "../store.ts";
+import { applyControl, type ControlResult, controlRuns, logPath, queryRuns, readLog, readRun, runStats, SAFE_ID, stateHome } from "../store.ts";
 
 // @types/bun types .html imports as a bundle; with the text attribute the runtime value is the file contents.
 const page = pageSource as unknown as string;
@@ -38,11 +38,30 @@ const CONTROL_STATUS: Record<ControlResult, number> = { done: 200, missing: 404,
 
 function control(req: Request, id: string, action: "stop" | "delete"): Response {
   if (!isTrustedChange(req)) return json(req, { error: "forbidden" }, 403);
-  const result = action === "stop" ? stopRun(id) : deleteRun(id);
+  const result = applyControl(action, id);
   return json(req, { result }, CONTROL_STATUS[result]);
 }
 
-function route(req: Request): Response {
+const BULK_MAX = 200;
+
+async function bulk(req: Request): Promise<Response> {
+  if (req.method !== "POST") return json(req, { error: "method not allowed" }, 405);
+  if (!isTrustedChange(req)) return json(req, { error: "forbidden" }, 403);
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return json(req, { error: "the body must be JSON" }, 400);
+  }
+  const { action, ids } = (body ?? {}) as { action?: unknown; ids?: unknown };
+  if (action !== "stop" && action !== "delete") return json(req, { error: "action must be stop or delete" }, 400);
+  if (!Array.isArray(ids) || ids.length === 0) return json(req, { error: "ids must be a non-empty list" }, 400);
+  if (ids.length > BULK_MAX) return json(req, { error: `at most ${BULK_MAX} ids per request` }, 413);
+  if (!ids.every((id) => typeof id === "string" && SAFE_ID.test(id))) return json(req, { error: "invalid run id" }, 400);
+  return json(req, controlRuns(action, [...new Set(ids as string[])]));
+}
+
+function route(req: Request): Response | Promise<Response> {
   if (!/^(127\.0\.0\.1|localhost)(:\d+)?$/.test(req.headers.get("host") ?? "")) return json(req, { error: "forbidden" }, 403);
   const url = new URL(req.url);
   const path = url.pathname;
@@ -64,6 +83,7 @@ function route(req: Request): Response {
     );
   }
   if (path === "/api/stats") return json(req, runStats());
+  if (path === "/api/runs/bulk") return bulk(req);
   const m = path.match(/^\/api\/runs\/([\w.-]+)(\/log|\/raw|\/stop)?$/);
   if (!m) return json(req, { error: "not found" }, 404);
   const id = m[1] as string;
@@ -86,10 +106,10 @@ export function startUi(port: number): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     port,
     hostname: "127.0.0.1",
-    fetch(req) {
+    async fetch(req) {
       // A malformed Host would otherwise surface as a 500 from URL parsing.
       try {
-        return route(req);
+        return await route(req);
       } catch {
         return json(req, { error: "bad request" }, 400);
       }

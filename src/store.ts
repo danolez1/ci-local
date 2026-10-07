@@ -9,7 +9,7 @@ export function stateHome(): string {
 
 export const zstdCacheDir = (): string => join(stateHome(), "zstd-cache");
 const runsDir = (): string => join(stateHome(), "runs");
-const SAFE_ID = /^[\w.-]+$/;
+export const SAFE_ID = /^[\w.-]+$/;
 
 // A repo or image name with a space or quote would produce an id the page and CLI refuse to open.
 const slug = (v: string): string => v.replace(/[^\w.-]/g, "_");
@@ -173,13 +173,28 @@ export function stopRun(id: string): ControlResult {
   const rec = readRun(id);
   if (!rec) return "missing";
   if (rec.status !== "running" || rec.pid === undefined) return "not-running";
-  if (!isCiLocalProcess(rec.pid)) return "foreign";
+  // A stale record naming the server's own pid would make the page terminate itself.
+  if (rec.pid === process.pid || !isCiLocalProcess(rec.pid)) return "foreign";
   try {
     process.kill(rec.pid, "SIGTERM");
   } catch {
     return "not-running";
   }
   return "done";
+}
+
+export const applyControl = (action: "stop" | "delete", id: string): ControlResult => (action === "stop" ? stopRun(id) : deleteRun(id));
+
+export interface BulkOutcome {
+  results: Array<{ id: string; result: ControlResult }>;
+  summary: { requested: number; done: number; failed: number };
+}
+
+/** Applies stop or delete to each id on its own, so one run that cannot be touched never blocks the rest. */
+export function controlRuns(action: "stop" | "delete", ids: string[]): BulkOutcome {
+  const results = ids.map((id) => ({ id, result: applyControl(action, id) }));
+  const done = results.filter((r) => r.result === "done").length;
+  return { results, summary: { requested: ids.length, done, failed: ids.length - done } };
 }
 
 export function listRuns(limit = 20): RunRecord[] {

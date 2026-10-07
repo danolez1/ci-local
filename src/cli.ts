@@ -25,8 +25,10 @@ const HELP = `ci-local: build images on this machine and publish them to a regis
   ci-local status [-n 10] [--json]  recent runs
   ci-local logs [id] [-f]         a run's log (newest by default), -f follows it
   ci-local watch                  live terminal view
-  ci-local ui [--port 7777]       local web view of the same runs, in this terminal
-  ci-local ui start|stop|restart|status|open|logs   keep the web view running in the background
+  ci-local ui [--port 7777]       start the local web view in the background and return; a second call prints the running one
+  ci-local ui-stop                stop the background web view (same as ui stop)
+  ci-local ui serve [--port 7777] the web view in this terminal (ctrl-c stops it)
+  ci-local ui start|stop|restart|status|open|logs   manage the background web view
   ci-local ui install|uninstall   start it at login (macOS LaunchAgent)
   ci-local init --image <path> [--build-env build.env]  write a starter ci-local.yaml
   ci-local install-hook [--kind husky|githooks|git] [--remove]
@@ -152,7 +154,7 @@ async function runInBackground(a: Args): Promise<number> {
     const run = listRuns(20).find((r) => r.pid === child.pid);
     if (run) {
       rmSync(failureLog, { force: true });
-      console.log(`started ${run.id}\nfollow it with: ci-local logs -f ${run.id}${readDaemon() ? "" : "   (or ci-local ui start)"}`);
+      console.log(`started ${run.id}\nfollow it with: ci-local logs -f ${run.id}${readDaemon() ? "" : "   (or ci-local ui)"}`);
       return 0;
     }
     if (child.exitCode !== null) break;
@@ -264,20 +266,25 @@ async function openUrl(url: string): Promise<void> {
   await exec([process.platform === "darwin" ? "open" : "xdg-open", url]);
 }
 
+async function cmdUiStop(): Promise<number> {
+  console.log((await stopDaemon()) ? "stopped" : "not running");
+  if (agentInstalled()) console.log("the login service is installed and will start it again; remove it with: ci-local ui uninstall");
+  return 0;
+}
+
 async function cmdUi(a: Args): Promise<number> {
   const port = Number(flag(a, "port") ?? DEFAULT_PORT);
   const where = (p: number): string => `http://127.0.0.1:${p}`;
-  switch (a.sub ?? "serve") {
+  switch (a.sub ?? "start") {
     case "serve": {
       const server = startUi(port);
-      // Only an explicit `ui serve` (the background child, the login agent) registers; a terminal session must not displace it.
-      if (a.sub === "serve") registerDaemon(server.port as number);
+      registerDaemon(server.port as number);
       console.log(`ci-local ui on ${where(server.port as number)}  (ctrl-c to stop)`);
       return await new Promise<number>(() => {});
     }
     case "start": {
       const info = await startDaemon(port);
-      console.log(`web view running on ${where(info.port)} (pid ${info.pid}); stop it with: ci-local ui stop`);
+      console.log(`web view running on ${where(info.port)} (pid ${info.pid}); stop it with: ci-local ui-stop`);
       if (a.flags.has("open")) await openUrl(where(info.port));
       return 0;
     }
@@ -288,9 +295,7 @@ async function cmdUi(a: Args): Promise<number> {
       return 0;
     }
     case "stop":
-      console.log((await stopDaemon()) ? "stopped" : "not running");
-      if (agentInstalled()) console.log("the login service is installed and will start it again; remove it with: ci-local ui uninstall");
-      return 0;
+      return cmdUiStop();
     case "restart": {
       await stopDaemon();
       const info = await startDaemon(port);
@@ -299,7 +304,7 @@ async function cmdUi(a: Args): Promise<number> {
     }
     case "status": {
       const info = readDaemon();
-      console.log(info ? `running on ${where(info.port)} (pid ${info.pid}, since ${info.started})\nlog: ${uiLogFile()}` : "not running (start it with: ci-local ui start)");
+      console.log(info ? `running on ${where(info.port)} (pid ${info.pid}, since ${info.started})\nlog: ${uiLogFile()}` : "not running (start it with: ci-local ui)");
       return info ? 0 : 1;
     }
     case "logs": {
@@ -492,6 +497,7 @@ async function main(): Promise<number> {
     case "logs": return cmdLogs(a);
     case "watch": await watch(); return 0;
     case "ui": return cmdUi(a);
+    case "ui-stop": return cmdUiStop();
     case "init": return cmdInit(a);
     case "install-hook": return cmdInstallHook(a);
     case "doctor": return cmdDoctor();
