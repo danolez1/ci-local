@@ -30,3 +30,14 @@ test("rejects a JWT and an sk- style key", () => {
 test("a bare carriage return does not hide a second assignment", () => {
   expect(guardBuildEnv("NEXT_PUBLIC_A=1\rAWS_VALUE=abc\r", prefixes, "b.env")[0]).toContain("'AWS_VALUE'");
 });
+
+test("a JWT is accepted only for a key named in public_jwt_keys", () => {
+  const jwt = ["eyJhbGciOiJIUzI1NiJ9", "payload", "sig"].join(".");
+  expect(guardBuildEnv(`NEXT_PUBLIC_ANON=${jwt}\n`, prefixes, "b.env", ["NEXT_PUBLIC_ANON"])).toEqual([]);
+  expect(guardBuildEnv(`NEXT_PUBLIC_OTHER=${jwt}\n`, prefixes, "b.env", ["NEXT_PUBLIC_ANON"])[0]).toContain("looks like a secret");
+});
+
+test("an allowed JWT key still refuses other secret patterns", () => {
+  const live = ["sk", "live", "abc123"].join("_");
+  expect(guardBuildEnv(`NEXT_PUBLIC_ANON=${live}\n`, prefixes, "b.env", ["NEXT_PUBLIC_ANON"])[0]).toContain("looks like a secret");
+});

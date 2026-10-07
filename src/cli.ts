@@ -92,7 +92,7 @@ async function runAll(opts: { cwd: string; sha?: string; images?: string[]; prof
   if (wanted.length === 0) throw new ConfigError([`no image matches ${opts.images?.join(", ")} (known: ${ctx.config.images.map((i) => i.name).join(", ")})`]);
   const results: RunRecord[] = [];
   for (const spec of wanted) {
-    results.push(await runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, checks: ctx.config.checks, flags: opts.flags }));
+    results.push(await runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, publicJwtKeys: ctx.config.public_jwt_keys, checks: ctx.config.checks, flags: opts.flags }));
   }
   return results;
 }
@@ -435,7 +435,7 @@ async function cmdDoctor(): Promise<number> {
       for (const file of [img.build_env, img.build_args_file]) {
         if (!file) continue;
         try {
-          const problems = guardBuildEnv(await committedFile(root, "HEAD", file), config.public_prefixes, file);
+          const problems = guardBuildEnv(await committedFile(root, "HEAD", file), config.public_prefixes, file, config.public_jwt_keys);
           line(problems.length ? "fail" : "ok", problems.length ? problems.join("\n      ") : `${file} holds only public values`);
         } catch (e) {
           line("fail", `${file} (${img.name}): ${(e as Error).message}`);
@@ -451,7 +451,7 @@ async function cmdDoctor(): Promise<number> {
       continue;
     }
     try {
-      const problems = guardBuildEnv(readExtractedFile(root, file), config?.public_prefixes ?? [], file);
+      const problems = guardBuildEnv(readExtractedFile(root, file), config?.public_prefixes ?? [], file, config?.public_jwt_keys ?? []);
       line(problems.length ? "fail" : "ok", problems.length ? problems.join("\n      ") : `${file} holds only public values`);
     } catch (e) {
       line("fail", (e as Error).message);

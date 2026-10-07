@@ -72,6 +72,7 @@ version: 1
 profile: vps                    # optional
 branches: [main, release/*]     # pushes to these build and publish
 public_prefixes: [NEXT_PUBLIC_] # optional, keys allowed in build_env
+public_jwt_keys: [NEXT_PUBLIC_SUPABASE_ANON_KEY] # optional, keys whose public value may be a JWT (anon and publishable keys); every other JWT is refused
 images:
   - name: web
     image: acme/web             # repository path in the registry

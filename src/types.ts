@@ -49,6 +49,7 @@ export interface RepoConfig {
   profiles: Record<string, Profile>;
   branches: string[];
   public_prefixes: string[];
+  public_jwt_keys: string[];
   images: ImageSpec[];
   checks: Check[];
 }

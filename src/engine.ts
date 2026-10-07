@@ -37,6 +37,7 @@ interface RunInput {
   profileName: string;
   profile: Profile;
   publicPrefixes: string[];
+  publicJwtKeys: string[];
   checks: Check[];
   flags: RunFlags;
 }
@@ -78,7 +79,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       if (await isCommitted(root, sha, spec.build_env_local)) throw new Error(`${spec.build_env_local} is committed at ${shortSha(sha)}; a working-tree copy must not override it, use build_env instead`);
       if (!existsSync(join(root, spec.build_env_local))) throw new Error(`${spec.build_env_local} (build_env_local) does not exist in ${root}`);
       localEnv = readExtractedFile(root, spec.build_env_local);
-      const problems = guardBuildEnv(localEnv, input.publicPrefixes, spec.build_env_local);
+      const problems = guardBuildEnv(localEnv, input.publicPrefixes, spec.build_env_local, input.publicJwtKeys);
       if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
     }
     const localHash = localEnv === undefined ? "" : new Bun.CryptoHasher("sha256").update(localEnv).digest("hex").slice(0, 12);
@@ -98,7 +99,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       const problems: string[] = [];
       for (const file of [spec.build_env, spec.build_args_file]) {
         if (!file) continue;
-        problems.push(...guardBuildEnv(await committedFile(root, sha, file), input.publicPrefixes, file));
+        problems.push(...guardBuildEnv(await committedFile(root, sha, file), input.publicPrefixes, file, input.publicJwtKeys));
       }
       if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
     });
@@ -145,7 +146,7 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
       for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
         if (!file) continue;
-        const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file);
+        const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file, input.publicJwtKeys);
         if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
       }
       const buildArgs: string[] = [];

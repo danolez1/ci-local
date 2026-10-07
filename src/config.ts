@@ -208,6 +208,7 @@ export function parseRepoConfig(text: string): RepoConfig {
 
   const branches = strList(raw.branches, "branches", problems);
   const prefixes = strList(raw.public_prefixes, "public_prefixes", problems);
+  const jwtKeys = strList(raw.public_jwt_keys, "public_jwt_keys", problems);
   const checks = parseChecks(raw.checks, problems);
   if (problems.length) throw new ConfigError(problems);
   return {
@@ -216,6 +217,7 @@ export function parseRepoConfig(text: string): RepoConfig {
     profiles: parseProfiles(raw.profiles, "profiles", problems),
     branches: branches.length ? branches : ["main"],
     public_prefixes: prefixes.length ? prefixes : DEFAULT_PREFIXES,
+    public_jwt_keys: jwtKeys,
     images,
     checks,
   };
