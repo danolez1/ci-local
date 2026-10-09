@@ -21,10 +21,10 @@ A run page shows the phases (checks, build, compress, push) with their log, and 
 You need [Bun](https://bun.sh), `docker` (OrbStack or Docker Desktop) and [crane](https://github.com/google/go-containerregistry/tree/main/cmd/crane) (`brew install crane`). The ssh transport also needs an ssh alias for your server, and `compression: zstd` needs the `zstd` command (`brew install zstd`).
 
 ```sh
-npm install -g github:danolez1/ci-local        # puts `ci-local` on PATH
+bun install -g ci-local        # puts `ci-local` on PATH
 # or run it once without installing
-npx github:danolez1/ci-local doctor
-bunx github:danolez1/ci-local doctor
+npx ci-local doctor
+bunx ci-local doctor
 ```
 
 Git hooks call `ci-local` from PATH, so use the global install for repos you want hooked.
