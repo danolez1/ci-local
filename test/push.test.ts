@@ -225,6 +225,59 @@ test("--no-checks skips them for a manual run", async () => {
   expect(checkRuns()).toBe(before);
 });
 
+test("an image runs only the checks that name it, and each gets its own image name", async () => {
+  env.CHECK_LOG = join(base, "checks.log");
+  writeFileSync(
+    join(repo, "ci-local.yaml"),
+    [
+      "version: 1",
+      "branches: [main]",
+      "images:",
+      "  - name: web",
+      "    image: acme/web",
+      "    target: web",
+      "  - name: api",
+      "    image: acme/api",
+      "    target: api",
+      "checks:",
+      "  - name: shared",
+      '    run: echo "shared:$CI_LOCAL_IMAGE" >> "$CHECK_LOG"',
+      "  - name: web-only",
+      '    run: echo "web-only:$CI_LOCAL_IMAGE" >> "$CHECK_LOG"',
+      "    images: [web]",
+      "",
+    ].join("\n"),
+  );
+  writeFileSync(join(repo, "gate.txt"), "per-image\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "per-image checks");
+  writeFileSync(join(base, "checks.log"), "");
+  writeFileSync(calls, "");
+  expect((await push()).code).toBe(0);
+  const lines = readFileSync(join(base, "checks.log"), "utf8").trim().split("\n").sort();
+  // The repository-wide check runs once and sees no image; the web check runs for web only, with its name set.
+  expect(lines).toEqual(["shared:", "web-only:web"]);
+  // A second push of the same tree reuses every pass.
+  expect((await push()).code).toBe(0);
+  expect(readFileSync(join(base, "checks.log"), "utf8").trim().split("\n").length).toBe(2);
+});
+
+test("a failing check of one image stops that image's build", async () => {
+  writeFileSync(
+    join(repo, "ci-local.yaml"),
+    "version: 1\nbranches: [main]\nimages:\n  - name: web\n    image: acme/web\n    target: web\n  - name: api\n    image: acme/api\n    target: api\nchecks:\n  - name: api-gate\n    run: exit 4\n    images: [api]\n",
+  );
+  writeFileSync(join(repo, "gate.txt"), "api-fails\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "api gate");
+  writeFileSync(calls, "");
+  const r = await push();
+  expect(r.code).not.toBe(0);
+  const builds = log().split("\n").filter((l) => l.startsWith("docker buildx build"));
+  expect(builds.some((l) => l.includes("--target web"))).toBe(true);
+  expect(builds.some((l) => l.includes("--target api"))).toBe(false);
+});
+
 test("two images from one Dockerfile build their own stage and get different tags", async () => {
   writeFileSync(
     join(repo, "ci-local.yaml"),

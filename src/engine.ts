@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runChecks } from "./checks.ts";
+import { checksFor, runChecks } from "./checks.ts";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
 import { exec, has, killChildren, must, setProxyMode } from "./exec.ts";
@@ -105,14 +105,15 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
     });
 
     if (flags.dry) {
-      if (input.checks.length && !flags.noChecks) run.say(`dry run: would run checks ${input.checks.map((c) => c.name).join(", ")}`);
+      const guards = checksFor(input.checks, spec.name);
+      if (guards.length && !flags.noChecks) run.say(`dry run: would run checks ${guards.map((c) => c.name).join(", ")}`);
       run.say(`dry run: would publish ${spec.image}:${tag}`);
       run.finish("dry-run");
       return run.record;
     }
 
     // Before docker and the tunnel are opened, so a long test run never holds a connection idle.
-    if (!flags.noChecks) await runChecks(run, root, sha, input.checks);
+    if (!flags.noChecks) await runChecks(run, root, sha, input.checks, spec.name);
 
     await run.phase("docker", async () => {
       if ((await exec(["docker", "info"])).code !== 0) throw new Error("docker is not running (start OrbStack or Docker Desktop)");

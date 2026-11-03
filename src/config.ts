@@ -68,7 +68,7 @@ function zstdLevel(v: unknown, where: string, problems: string[]): number | unde
   return v;
 }
 
-function parseChecks(raw: unknown, problems: string[]): Check[] {
+function parseChecks(raw: unknown, problems: string[], imageNames: string[]): Check[] {
   if (raw === undefined || raw === null) return [];
   if (!Array.isArray(raw)) {
     problems.push("checks must be a list");
@@ -86,12 +86,18 @@ function parseChecks(raw: unknown, problems: string[]): Check[] {
     const run = str(item.run, `${where}.run`, problems, true);
     const ttl = item.ttl_hours;
     if (ttl !== undefined && (typeof ttl !== "number" || !Number.isInteger(ttl) || ttl < 1)) problems.push(`${where}.ttl_hours must be a whole number of hours, 1 or more`);
+    let images: string[] | undefined;
+    if (item.images !== undefined) {
+      images = strList(item.images, `${where}.images`, problems);
+      if (images.length === 0) problems.push(`${where}.images must name at least one image`);
+      for (const image of images) if (!imageNames.includes(image)) problems.push(`${where}.images '${image}' is not an image in this file (known: ${imageNames.join(", ")})`);
+    }
     if (!name || !run) return;
     // The name becomes a file name for the stamp, so it stays plain.
     if (!/^[\w.-]+$/.test(name)) problems.push(`${where}.name may only use letters, digits, '.', '_' and '-'`);
     if (seen.has(name)) problems.push(`${where}.name '${name}' is used twice`);
     seen.add(name);
-    checks.push({ name, run, ttl_hours: typeof ttl === "number" ? ttl : 0 });
+    checks.push({ name, run, ttl_hours: typeof ttl === "number" ? ttl : 0, ...(images?.length ? { images } : {}) });
   });
   return checks;
 }
@@ -209,7 +215,7 @@ export function parseRepoConfig(text: string): RepoConfig {
   const branches = strList(raw.branches, "branches", problems);
   const prefixes = strList(raw.public_prefixes, "public_prefixes", problems);
   const jwtKeys = strList(raw.public_jwt_keys, "public_jwt_keys", problems);
-  const checks = parseChecks(raw.checks, problems);
+  const checks = parseChecks(raw.checks, problems, images.map((image) => image.name));
   if (problems.length) throw new ConfigError(problems);
   return {
     version: 1,

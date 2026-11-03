@@ -97,6 +97,22 @@ test("a check with a missing command, a repeated or odd name, or a bad expiry is
   expect(() => parseRepoConfig(withChecks("  - name: a\n    run: y\n    ttl_hours: 0\n"))).toThrow("whole number");
 });
 
+const twoImages = (checks: string) => `version: 1\nimages:\n  - image: acme/web\n  - image: acme/api\nchecks:\n${checks}`;
+
+test("a check can name the images it guards, and none means all of them", () => {
+  const config = parseRepoConfig(twoImages("  - name: lint\n    run: x\n  - name: web-build\n    run: y\n    images: [web]\n"));
+  expect(config.checks).toEqual([
+    { name: "lint", run: "x", ttl_hours: 0 },
+    { name: "web-build", run: "y", ttl_hours: 0, images: ["web"] },
+  ]);
+});
+
+test("a check that names no image, or an unknown one, is refused", () => {
+  expect(() => parseRepoConfig(twoImages("  - name: a\n    run: x\n    images: []\n"))).toThrow("at least one image");
+  expect(() => parseRepoConfig(twoImages("  - name: a\n    run: x\n    images: [mobile]\n"))).toThrow("'mobile' is not an image");
+  expect(() => parseRepoConfig(twoImages("  - name: a\n    run: x\n    images: web\n"))).toThrow("list of strings");
+});
+
 describe("tag salt", () => {
   const spec = { dockerfile: "Dockerfile", context: ".", target: undefined } as ImageSpec;
 

@@ -41,6 +41,8 @@ export interface Check {
   run: string;
   /** Hours a pass stays valid for the same tree; 0 means until the tree changes. */
   ttl_hours: number;
+  /** Image names this check belongs to. Without it the check guards every image. */
+  images?: string[];
 }
 
 export interface RepoConfig {
