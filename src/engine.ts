@@ -112,17 +112,102 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       return run.record;
     }
 
-    // Before docker and the tunnel are opened, so a long test run never holds a connection idle.
-    if (!flags.noChecks) await runChecks(run, root, sha, input.checks, spec.name);
+    const zstd = flags.push && spec.compression === "zstd";
+    const ociDir = () => join(workDir as string, "image-oci");
+    if (!zstd) localTag = `ci-local/${spec.image}:${tag}`;
 
-    await run.phase("docker", async () => {
-      if ((await exec(["docker", "info"])).code !== 0) throw new Error("docker is not running (start OrbStack or Docker Desktop)");
-      if (spec.compression === "zstd" && flags.push && !has("zstd")) throw new Error("zstd is not installed (brew install zstd)");
-    });
+    const checkDocker = () =>
+      run.phase("docker", async () => {
+        if ((await exec(["docker", "info"])).code !== 0) throw new Error("docker is not running (start OrbStack or Docker Desktop)");
+        if (spec.compression === "zstd" && flags.push && !has("zstd")) throw new Error("zstd is not installed (brew install zstd)");
+      });
+
+    // Extracts, builds and, when pushing, turns the image into the artifact the registry takes; nothing here needs the registry.
+    const packageImage = async (): Promise<string> => {
+      workDir = mkdtempSync(join(tmpdir(), "ci-local-"));
+      const ctx = join(workDir, "ctx");
+      mkdirSync(ctx);
+      await run.phase("extract", async () => {
+        await archiveTo(root, sha, ctx);
+        if (spec.build_env_local && localEnv !== undefined) placeFile(ctx, spec.build_env_local, localEnv);
+      });
+
+      // The image is exported as an OCI layout and recompressed, so it is never loaded into the local daemon.
+      await run.phase("build", async () => {
+        // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
+        for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
+          if (!file) continue;
+          const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file, input.publicJwtKeys);
+          if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
+        }
+        const buildArgs: string[] = [];
+        if (spec.build_args_file) {
+          for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
+        }
+        const r = await exec(
+          [
+            "docker", "buildx", "build",
+            "--platform", platform,
+            "--provenance=false", "--sbom=false", "--progress=plain",
+            "-f", within(ctx, spec.dockerfile),
+            ...(spec.target ? ["--target", spec.target] : []),
+            ...buildArgs,
+            ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir()},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
+            within(ctx, spec.context),
+          ],
+          { onLine },
+        );
+        if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
+      });
+
+      if (!flags.push) return "";
+      if (zstd) {
+        await run.phase("compress", async () => {
+          const stats = await recompressLayers(ociDir(), spec.zstd_level, zstdCacheDir(), onLine);
+          run.say(`compressed to zstd-${spec.zstd_level}: ${stats.compressed} layers compressed, ${stats.cached} reused, ${Math.round(stats.before / 1e6)} MB -> ${Math.round(stats.after / 1e6)} MB`);
+        });
+        return ociDir();
+      }
+      const tarball = join(workDir, "image.tar");
+      await run.phase("save", async () => {
+        await must(["docker", "save", "-o", tarball, localTag as string]);
+      });
+      return tarball;
+    };
+
+    // Opt-in: the build uses this machine's docker, not the checks' resources, so it can run while they do.
+    // Pushing still waits for every check, and a failed check stops the build.
+    const guards = flags.noChecks ? [] : checksFor(input.checks, spec.name);
+    let building: Promise<string> | undefined;
+    if (spec.build_during_checks && guards.length > 0) {
+      building = (async () => {
+        await checkDocker();
+        return packageImage();
+      })();
+      building.catch(() => {});
+    }
+    const stopBuilding = async () => {
+      if (!building) return;
+      killChildren();
+      await building.catch(() => {});
+    };
+
+    // Without the overlap this runs before docker and the tunnel are opened, so a long test run never holds a connection idle.
+    if (!flags.noChecks) {
+      try {
+        await runChecks(run, root, sha, input.checks, spec.name);
+      } catch (e) {
+        await stopBuilding();
+        throw e;
+      }
+    }
+
+    if (!building) await checkDocker();
 
     if (flags.push) registry = await run.phase("registry", () => openRegistry(profile));
 
     if (registry && (await registry.exists(spec.image, tag))) {
+      await stopBuilding();
       run.say(`${tag} is already in the registry, build skipped`);
       run.set({ pushed: true });
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
@@ -131,58 +216,9 @@ export async function runImage(input: RunInput): Promise<RunRecord> {
       return run.record;
     }
 
-    workDir = mkdtempSync(join(tmpdir(), "ci-local-"));
-    const ctx = join(workDir, "ctx");
-    mkdirSync(ctx);
-    await run.phase("extract", async () => {
-      await archiveTo(root, sha, ctx);
-      if (spec.build_env_local && localEnv !== undefined) placeFile(ctx, spec.build_env_local, localEnv);
-    });
-
-    // The image is exported as an OCI layout and recompressed, so it is never loaded into the local daemon.
-    const zstd = registry !== undefined && spec.compression === "zstd";
-    const ociDir = join(workDir, "image-oci");
-    if (!zstd) localTag = `ci-local/${spec.image}:${tag}`;
-    await run.phase("build", async () => {
-      // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
-      for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
-        if (!file) continue;
-        const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file, input.publicJwtKeys);
-        if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
-      }
-      const buildArgs: string[] = [];
-      if (spec.build_args_file) {
-        for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
-      }
-      const r = await exec(
-        [
-          "docker", "buildx", "build",
-          "--platform", platform,
-          "--provenance=false", "--sbom=false", "--progress=plain",
-          "-f", within(ctx, spec.dockerfile),
-          ...(spec.target ? ["--target", spec.target] : []),
-          ...buildArgs,
-          ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
-          within(ctx, spec.context),
-        ],
-        { onLine },
-      );
-      if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
-    });
+    const artifact = await (building ?? packageImage());
 
     if (registry) {
-      let artifact = join(workDir, "image.tar");
-      if (zstd) {
-        artifact = ociDir;
-        await run.phase("compress", async () => {
-          const stats = await recompressLayers(ociDir, spec.zstd_level, zstdCacheDir(), onLine);
-          run.say(`compressed to zstd-${spec.zstd_level}: ${stats.compressed} layers compressed, ${stats.cached} reused, ${Math.round(stats.before / 1e6)} MB -> ${Math.round(stats.after / 1e6)} MB`);
-        });
-      } else {
-        await run.phase("save", async () => {
-          await must(["docker", "save", "-o", artifact, localTag as string]);
-        });
-      }
       await run.phase("push", async () => {
         await registry!.push(artifact, spec.image, tag, { onLine, onProgress: (push) => run.set({ push }) });
       });

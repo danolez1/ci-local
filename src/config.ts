@@ -102,6 +102,12 @@ function parseChecks(raw: unknown, problems: string[], imageNames: string[]): Ch
   return checks;
 }
 
+function flag(v: unknown, where: string, problems: string[]): boolean | undefined {
+  if (v === undefined) return undefined;
+  if (typeof v !== "boolean") problems.push(`${where} must be true or false`);
+  return typeof v === "boolean" ? v : undefined;
+}
+
 function strList(v: unknown, where: string, problems: string[]): string[] {
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) {
@@ -206,6 +212,7 @@ export function parseRepoConfig(text: string): RepoConfig {
         build_env_local: relPath(item.build_env_local, `${where}.build_env_local`, problems),
         compression: oneOf(item.compression, ["gzip", "zstd"], `${where}.compression`, problems) ?? "gzip",
         zstd_level: zstdLevel(item.zstd_level, `${where}.zstd_level`, problems) ?? DEFAULT_ZSTD_LEVEL,
+        build_during_checks: flag(item.build_during_checks, `${where}.build_during_checks`, problems) ?? false,
         tag_include: item.tag_include === undefined ? defaults.tag_include : strList(item.tag_include, `${where}.tag_include`, problems),
         tag_exclude: item.tag_exclude === undefined ? defaults.tag_exclude : strList(item.tag_exclude, `${where}.tag_exclude`, problems),
       });

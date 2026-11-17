@@ -43,6 +43,12 @@ describe("repo config", () => {
     }
   });
 
+  test("an image builds after its checks unless it opts in to building during them", () => {
+    const c = parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: true\n  - image: acme/api\n");
+    expect(c.images.map((i) => i.build_during_checks)).toEqual([true, false]);
+    expect(() => parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: yes please\n")).toThrow(/build_during_checks must be true or false/);
+  });
+
   test("rejects duplicate image names", () => {
     expect(() => parseRepoConfig("version: 1\nimages:\n  - image: a/x\n  - image: b/x\n")).toThrow(/used twice/);
   });

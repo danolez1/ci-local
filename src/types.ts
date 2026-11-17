@@ -31,6 +31,8 @@ export interface ImageSpec {
   /** zstd layers are about a third smaller than gzip ones; the registry's pull side needs Docker 23 or newer. */
   compression: "gzip" | "zstd";
   zstd_level: number;
+  /** Build while the checks run instead of after them; the push still waits for every check. */
+  build_during_checks: boolean;
   tag_include: string[];
   tag_exclude: string[];
 }
