@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { pool, shareInFlight } from "../src/inflight.ts";
+import { Mutex, pool, shareInFlight } from "../src/inflight.ts";
 
 test("a second caller with the same key waits for the first and does not run the work again", async () => {
   let runs = 0;
@@ -54,4 +54,29 @@ test("a limit of one runs the items one after another", async () => {
     order.push(-n);
   });
   expect(order).toEqual([1, -1, 2, -2, 3, -3]);
+});
+
+test("the mutex lets one section run at a time and serves waiters in the order they asked", async () => {
+  const mutex = new Mutex();
+  const log: string[] = [];
+  let active = 0;
+  let peak = 0;
+  const section = (name: string, ms: number) =>
+    mutex.run(async () => {
+      active++;
+      peak = Math.max(peak, active);
+      log.push(`start ${name}`);
+      await Bun.sleep(ms);
+      log.push(`end ${name}`);
+      active--;
+    });
+  await Promise.all([section("a", 30), section("b", 5), section("c", 5)]);
+  expect(peak).toBe(1);
+  expect(log).toEqual(["start a", "end a", "start b", "end b", "start c", "end c"]);
+});
+
+test("the mutex is released when a section throws", async () => {
+  const mutex = new Mutex();
+  await expect(mutex.run(async () => Promise.reject(new Error("boom")))).rejects.toThrow("boom");
+  expect(await mutex.run(async () => "after")).toBe("after");
 });

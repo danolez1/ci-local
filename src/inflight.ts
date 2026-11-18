@@ -31,3 +31,22 @@ export async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Pro
   await Promise.all(lanes);
   return results;
 }
+
+/** Lets one async section run at a time; the others wait their turn in the order they asked. */
+export class Mutex {
+  private tail: Promise<void> = Promise.resolve();
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    const before = this.tail;
+    let release!: () => void;
+    this.tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await before;
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+}
