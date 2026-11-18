@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { checksFor, runChecks } from "./checks.ts";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
 import { withProxyHint } from "./docker.ts";
-import { exec, has, killChildren, must, setProxyMode } from "./exec.ts";
+import { exec, has, inChildGroup, killChildren, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
@@ -26,6 +26,8 @@ export interface RunFlags {
   noChecks?: boolean;
   platform?: string;
   echo: boolean;
+  /** Put before every echoed line when several images run at once. */
+  echoPrefix?: string;
   ref?: string;
   trigger?: "hook" | "manual";
 }
@@ -42,9 +44,14 @@ interface RunInput {
   flags: RunFlags;
 }
 
-export async function runImage(input: RunInput): Promise<RunRecord> {
+// Each image gets its own child group, so cancelling one image's build never stops another image running beside it.
+export function runImage(input: RunInput): Promise<RunRecord> {
+  return inChildGroup(() => runImageInGroup(input));
+}
+
+async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   const { root, sha, spec, profile, flags } = input;
-  const run = RunHandle.create({ repo_path: root, image: spec.image, sha, profile: input.profileName, echo: flags.echo, ref: flags.ref, trigger: flags.trigger });
+  const run = RunHandle.create({ repo_path: root, image: spec.image, sha, profile: input.profileName, echo: flags.echo, prefix: flags.echoPrefix, ref: flags.ref, trigger: flags.trigger });
   setProxyMode(profile.proxy === "inherit");
   const platform = flags.platform ?? spec.platform ?? profile.platform ?? "linux/amd64";
   let registry: Registry | undefined;

@@ -23,13 +23,15 @@ interface RunInit {
   sha: string;
   profile: string;
   echo: boolean;
+  /** Put before every echoed line, so output of images running side by side can be told apart. */
+  prefix?: string;
   ref?: string;
   trigger?: "hook" | "manual";
 }
 
 export class RunHandle {
   readonly dir: string;
-  constructor(public record: RunRecord, private echo: boolean) {
+  constructor(public record: RunRecord, private echo: boolean, private prefix = "") {
     this.dir = join(runsDir(), record.id);
     mkdirSync(this.dir, { recursive: true });
     this.save();
@@ -52,7 +54,7 @@ export class RunHandle {
       ref: init.ref,
       trigger: init.trigger,
     };
-    return new RunHandle(record, init.echo);
+    return new RunHandle(record, init.echo, init.prefix);
   }
 
   private save(): void {
@@ -65,8 +67,8 @@ export class RunHandle {
   log(line: string): void {
     appendFileSync(join(this.dir, "log.txt"), `${line}\n`);
     if (!this.echo) return;
-    if (line.startsWith("##[group]")) process.stderr.write(`==> ${line.slice(9)}\n`);
-    else if (!line.startsWith("##[endgroup]")) process.stderr.write(`${line}\n`);
+    if (line.startsWith("##[group]")) process.stderr.write(`${this.prefix}==> ${line.slice(9)}\n`);
+    else if (!line.startsWith("##[endgroup]")) process.stderr.write(`${this.prefix}${line}\n`);
   }
 
   say(line: string): void {

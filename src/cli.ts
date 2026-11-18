@@ -7,6 +7,7 @@ import { agentInstalled, DEFAULT_PORT, installAgent, readDaemon, registerDaemon,
 import { daemonProxies, PROXY_HINT } from "./docker.ts";
 import { runImage, type RunFlags } from "./engine.ts";
 import { guardBuildEnv } from "./envguard.ts";
+import { pool } from "./inflight.ts";
 import { childEnv, exec, has } from "./exec.ts";
 import { checkedOutRef, committedFile, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
 import { isSafeRelative, readExtractedFile } from "./paths.ts";
@@ -35,7 +36,7 @@ const HELP = `ci-local: build images on this machine and publish them to a regis
   ci-local doctor                 check tools, config and the hook
   ci-local config                 print the resolved configuration
 
-run flags: --image <name> --sha <rev> --profile <name> --platform <os/arch> --dry-run --no-push --retag --keep-local --no-checks
+run flags: --image <name> --sha <rev> --profile <name> --platform <os/arch> --jobs <n> --dry-run --no-push --retag --keep-local --no-checks
 env: CI_LOCAL_SKIP_IMAGE=1 skips the hook, CI_LOCAL_PROFILE picks a profile, CI_LOCAL_CONFIG_DIR and CI_LOCAL_STATE_DIR move the files.
 `;
 
@@ -45,7 +46,7 @@ interface Args {
   flags: Map<string, string | true>;
 }
 
-const VALUE_FLAGS = new Set(["image", "sha", "profile", "platform", "n", "port", "kind", "build-env"]);
+const VALUE_FLAGS = new Set(["image", "sha", "profile", "platform", "n", "port", "kind", "build-env", "jobs"]);
 const CLI = fileURLToPath(import.meta.url);
 
 function parseArgs(argv: string[]): Args {
@@ -85,16 +86,16 @@ async function repoContext(cwd: string, profileFlag?: string) {
   return { root, config, profileName: name, profile };
 }
 
-async function runAll(opts: { cwd: string; sha?: string; images?: string[]; profile?: string; flags: RunFlags }): Promise<RunRecord[]> {
+async function runAll(opts: { cwd: string; sha?: string; images?: string[]; profile?: string; jobs?: number; flags: RunFlags }): Promise<RunRecord[]> {
   const ctx = await repoContext(opts.cwd, opts.profile);
   const sha = await resolveSha(ctx.root, opts.sha ?? "HEAD");
   const wanted = opts.images?.length ? ctx.config.images.filter((i) => opts.images?.includes(i.name)) : ctx.config.images;
   if (wanted.length === 0) throw new ConfigError([`no image matches ${opts.images?.join(", ")} (known: ${ctx.config.images.map((i) => i.name).join(", ")})`]);
-  const results: RunRecord[] = [];
-  for (const spec of wanted) {
-    results.push(await runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, publicJwtKeys: ctx.config.public_jwt_keys, checks: ctx.config.checks, flags: opts.flags }));
-  }
-  return results;
+  const jobs = Math.min(opts.jobs ?? ctx.config.concurrency, wanted.length);
+  return pool(wanted, jobs, (spec) => {
+    const flags = jobs > 1 ? { ...opts.flags, echoPrefix: `[${spec.name}] ` } : opts.flags;
+    return runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, publicJwtKeys: ctx.config.public_jwt_keys, checks: ctx.config.checks, flags });
+  });
 }
 
 interface Job {
@@ -166,6 +167,14 @@ async function runInBackground(a: Args): Promise<number> {
   return 1;
 }
 
+function jobsFlag(a: Args): number | undefined {
+  const raw = flag(a, "jobs");
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 8) throw new ConfigError(["--jobs must be a whole number from 1 to 8"]);
+  return n;
+}
+
 // :prod follows a hook run for the first configured branch, or an explicit --retag, never a casual manual run.
 async function cmdRun(a: Args): Promise<number> {
   if (a.flags.has("background")) return runInBackground(a);
@@ -186,6 +195,7 @@ async function cmdRun(a: Args): Promise<number> {
       sha: flag(a, "sha"),
       images: image ? [image] : undefined,
       profile: flag(a, "profile"),
+      jobs: jobsFlag(a),
       flags: {
         push: !a.flags.has("no-push"),
         retag: a.flags.has("retag"),

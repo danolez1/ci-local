@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { exec } from "./exec.ts";
+import { shareInFlight } from "./inflight.ts";
 import { shortSha } from "./git.ts";
 import { stateHome } from "./store.ts";
 import type { RunHandle } from "./store.ts";
@@ -57,13 +58,20 @@ export async function runChecks(run: RunHandle, root: string, sha: string, allCh
       run.say(`check ${check.name} already passed on this tree ${Math.round((Date.now() - (stamp as Stamp).at) / 60_000)} min ago, skipped`);
       continue;
     }
-    await run.phase(`check ${check.name}`, async () => {
-      const r = await exec(["bash", "-c", check.run], { cwd: root, env: check.images ? { CI_LOCAL_IMAGE: image } : undefined, onLine: (line) => run.log(line) });
-      if (r.code !== 0) {
-        rmSync(file, { force: true });
-        throw new Error(`check ${check.name} failed (exit ${r.code}): ${check.run}`);
-      }
-    });
+    // Images that run side by side share the checks that name no image, so a second one waits for the first instead of running it again.
+    const ranHere = await shareInFlight(file, () =>
+      run.phase(`check ${check.name}`, async () => {
+        const r = await exec(["bash", "-c", check.run], { cwd: root, env: check.images ? { CI_LOCAL_IMAGE: image } : undefined, onLine: (line) => run.log(line) });
+        if (r.code !== 0) {
+          rmSync(file, { force: true });
+          throw new Error(`check ${check.name} failed (exit ${r.code}): ${check.run}`);
+        }
+      }),
+    );
+    if (!ranHere) {
+      run.say(`check ${check.name} was already running for another image and passed`);
+      continue;
+    }
     if (clean) {
       mkdirSync(join(file, ".."), { recursive: true });
       writeFileSync(file, JSON.stringify({ tree, command, at: Date.now() } satisfies Stamp));

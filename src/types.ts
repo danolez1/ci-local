@@ -52,6 +52,8 @@ export interface RepoConfig {
   profile?: string;
   profiles: Record<string, Profile>;
   branches: string[];
+  /** How many images run at once; 1 keeps them one after another. */
+  concurrency: number;
   public_prefixes: string[];
   public_jwt_keys: string[];
   images: ImageSpec[];

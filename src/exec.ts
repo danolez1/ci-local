@@ -1,3 +1,5 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+
 interface ExecOptions {
   cwd?: string;
   env?: Record<string, string | undefined>;
@@ -39,11 +41,18 @@ async function pump(stream: ReadableStream<Uint8Array>, onLine?: (line: string) 
   return all;
 }
 
-const children = new Set<ReturnType<typeof Bun.spawn>>();
+type Child = ReturnType<typeof Bun.spawn>;
+const children = new Set<Child>();
+const groupStore = new AsyncLocalStorage<Set<Child>>();
 
-/** Stops everything exec() started, so an interrupted run does not leave a docker build or an upload going. */
+/** Runs fn with its own set of children, so killChildren() inside it leaves other concurrent runs alone. */
+export function inChildGroup<T>(fn: () => Promise<T>): Promise<T> {
+  return groupStore.run(new Set(), fn);
+}
+
+/** Stops what exec() started in the current child group, or everything outside one (a signal handler), so an interrupted run does not leave a docker build or an upload going. */
 export function killChildren(): void {
-  for (const proc of children) proc.kill("SIGTERM");
+  for (const proc of groupStore.getStore() ?? children) proc.kill("SIGTERM");
 }
 
 export async function exec(cmd: string[], options: ExecOptions = {}): Promise<ExecResult> {
@@ -54,7 +63,9 @@ export async function exec(cmd: string[], options: ExecOptions = {}): Promise<Ex
     stdout: "pipe",
     stderr: "pipe",
   });
+  const group = groupStore.getStore();
   children.add(proc);
+  group?.add(proc);
   try {
     const [out, err, code] = await Promise.all([
       pump(proc.stdout, options.onLine),
@@ -64,6 +75,7 @@ export async function exec(cmd: string[], options: ExecOptions = {}): Promise<Ex
     return { code, out, err };
   } finally {
     children.delete(proc);
+    group?.delete(proc);
   }
 }
 

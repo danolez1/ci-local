@@ -102,6 +102,18 @@ function parseChecks(raw: unknown, problems: string[], imageNames: string[]): Ch
   return checks;
 }
 
+const MAX_CONCURRENCY = 8;
+
+// Builds share this machine's CPU and docker, so the ceiling stops a typo from starting dozens at once.
+function parseConcurrency(v: unknown, problems: string[]): number {
+  if (v === undefined) return 1;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > MAX_CONCURRENCY) {
+    problems.push(`concurrency must be a whole number from 1 to ${MAX_CONCURRENCY}`);
+    return 1;
+  }
+  return v;
+}
+
 function flag(v: unknown, where: string, problems: string[]): boolean | undefined {
   if (v === undefined) return undefined;
   if (typeof v !== "boolean") problems.push(`${where} must be true or false`);
@@ -220,6 +232,7 @@ export function parseRepoConfig(text: string): RepoConfig {
   }
 
   const branches = strList(raw.branches, "branches", problems);
+  const concurrency = parseConcurrency(raw.concurrency, problems);
   const prefixes = strList(raw.public_prefixes, "public_prefixes", problems);
   const jwtKeys = strList(raw.public_jwt_keys, "public_jwt_keys", problems);
   const checks = parseChecks(raw.checks, problems, images.map((image) => image.name));
@@ -229,6 +242,7 @@ export function parseRepoConfig(text: string): RepoConfig {
     profile: str(raw.profile, "profile", problems),
     profiles: parseProfiles(raw.profiles, "profiles", problems),
     branches: branches.length ? branches : ["main"],
+    concurrency,
     public_prefixes: prefixes.length ? prefixes : DEFAULT_PREFIXES,
     public_jwt_keys: jwtKeys,
     images,

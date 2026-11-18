@@ -49,6 +49,14 @@ describe("repo config", () => {
     expect(() => parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: yes please\n")).toThrow(/build_during_checks must be true or false/);
   });
 
+  test("images run one after another unless concurrency says otherwise, within a ceiling", () => {
+    expect(parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n").concurrency).toBe(1);
+    expect(parseRepoConfig("version: 1\nconcurrency: 3\nimages:\n  - image: acme/web\n").concurrency).toBe(3);
+    for (const bad of ["0", "9", "2.5", "many"]) {
+      expect(() => parseRepoConfig(`version: 1\nconcurrency: ${bad}\nimages:\n  - image: acme/web\n`)).toThrow(/concurrency must be a whole number from 1 to 8/);
+    }
+  });
+
   test("rejects duplicate image names", () => {
     expect(() => parseRepoConfig("version: 1\nimages:\n  - image: a/x\n  - image: b/x\n")).toThrow(/used twice/);
   });
