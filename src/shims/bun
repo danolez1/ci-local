@@ -2,7 +2,26 @@
 # Put in front of PATH while a repository's checks run, so every `bun test` they start, directly or through
 # a package script, gets a test timeout and a single retry. bun's default of 5 seconds per test is a load
 # problem on a machine that builds images beside the tests, and neither bunfig nor an environment variable can raise it.
-real="${CI_LOCAL_REAL_BUN:?CI_LOCAL_REAL_BUN is not set}"
+# turbo and other tools strip unknown environment variables, so the real bun is found by walking PATH past this folder.
+self_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+real="${CI_LOCAL_REAL_BUN:-}"
+if [ -z "$real" ] || [ ! -x "$real" ]; then
+  real=""
+  IFS=: read -ra path_dirs <<< "$PATH"
+  for dir in "${path_dirs[@]}"; do
+    [ -n "$dir" ] || continue
+    resolved="$(cd "$dir" 2> /dev/null && pwd -P)" || continue
+    [ "$resolved" = "$self_dir" ] && continue
+    if [ -x "$dir/bun" ]; then
+      real="$dir/bun"
+      break
+    fi
+  done
+fi
+if [ -z "$real" ]; then
+  echo "ci-local bun shim: no bun found on PATH after $self_dir" >&2
+  exit 127
+fi
 timeout_ms="${CI_LOCAL_TEST_TIMEOUT:-30000}"
 retries="${CI_LOCAL_TEST_RETRY:-1}"
 
