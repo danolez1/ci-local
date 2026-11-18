@@ -1,0 +1,31 @@
+#!/bin/bash
+# Put in front of PATH while a repository's checks run, so every `bun test` they start, directly or through
+# a package script, gets a test timeout and a single retry. bun's default of 5 seconds per test is a load
+# problem on a machine that builds images beside the tests, and neither bunfig nor an environment variable can raise it.
+real="${CI_LOCAL_REAL_BUN:?CI_LOCAL_REAL_BUN is not set}"
+timeout_ms="${CI_LOCAL_TEST_TIMEOUT:-30000}"
+retries="${CI_LOCAL_TEST_RETRY:-1}"
+
+sub=1
+[ "${1:-}" = "--bun" ] && sub=2
+if [ "${!sub:-}" != "test" ]; then
+  exec "$real" "$@"
+fi
+
+has_flag() {
+  local name="$1" arg
+  shift
+  for arg in "$@"; do
+    case "$arg" in "$name" | "$name"=*) return 0 ;; esac
+  done
+  return 1
+}
+
+extra=()
+has_flag --timeout "$@" || extra+=(--timeout "$timeout_ms")
+{ [ "$retries" = "0" ] || has_flag --retry "$@"; } || extra+=(--retry "$retries")
+
+# Everything up to and including `test` stays in front, so a path or a flag after it keeps its meaning.
+head=("${@:1:$sub}")
+tail=("${@:$((sub + 1))}")
+exec "$real" "${head[@]}" "${extra[@]}" "${tail[@]}"

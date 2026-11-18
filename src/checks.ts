@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { exec } from "./exec.ts";
 import { Mutex, shareInFlight } from "./inflight.ts";
 import { shortSha } from "./git.ts";
@@ -36,6 +37,19 @@ async function git(root: string, ...args: string[]): Promise<string> {
   return (await exec(["git", "-C", root, ...args])).out.trim();
 }
 
+const SHIMS_DIR = fileURLToPath(new URL("./shims", import.meta.url));
+
+/** The environment a check runs in: its image, and a bun that gives every `bun test` a timeout and a retry. */
+export function checkEnv(image: string | undefined, path: string | undefined = process.env.PATH, realBun: string | null = Bun.which("bun")): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = {};
+  if (image !== undefined) env.CI_LOCAL_IMAGE = image;
+  if (realBun) {
+    env.CI_LOCAL_REAL_BUN = realBun;
+    env.PATH = `${SHIMS_DIR}:${path ?? ""}`;
+  }
+  return env;
+}
+
 // A repository's checks share its working tree, its test database and its lane's export folder, so images that run side by side take turns on them.
 const checksTurn = new Mutex();
 
@@ -65,7 +79,7 @@ export async function runChecks(run: RunHandle, root: string, sha: string, allCh
       // Images that run side by side share the checks that name no image, so a second one waits for the first instead of running it again.
       const ranHere = await shareInFlight(file, () =>
         run.phase(`check ${check.name}`, async () => {
-          const r = await exec(["bash", "-c", check.run], { cwd: root, env: check.images ? { CI_LOCAL_IMAGE: image } : undefined, onLine: (line) => run.log(line) });
+          const r = await exec(["bash", "-c", check.run], { cwd: root, env: checkEnv(check.images ? image : undefined), onLine: (line) => run.log(line) });
           if (r.code !== 0) {
             rmSync(file, { force: true });
             throw new Error(`check ${check.name} failed (exit ${r.code}): ${check.run}`);
