@@ -41,6 +41,7 @@ esac`);
 case "$1" in
   manifest) [ -f "${base}/exists" ] && exit 0; exit 1 ;;
   push)
+    [ -f "${base}/track-push" ] && { sleep 1; : > "${base}/exists"; exit 0; }
     [ -f "${base}/fail-push-always" ] && { echo "Error: connection reset" >&2; exit 1; }
     [ -f "${base}/fail-push-once" ] && { rm "${base}/fail-push-once"; echo "Error: use of closed network connection" >&2; exit 1; }
     exit 0 ;;
@@ -146,6 +147,21 @@ test("a build that lost a buildkit step shared with a cancelled build is run aga
   expect(r.code).toBe(0);
   expect(log().match(/^docker buildx build /gm)?.length).toBe(2);
 });
+
+test("two runs of the same image content build and upload it once", async () => {
+  writeFileSync(join(repo, "twice.txt"), "change\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "twice");
+  writeFileSync(join(base, "track-push"), "");
+  rmSync(join(base, "exists"), { force: true });
+  writeFileSync(calls, "");
+  const [a, b] = await Promise.all([exec(["ci-local", "run", "--no-checks"], { cwd: repo, env }), exec(["ci-local", "run", "--no-checks"], { cwd: repo, env })]);
+  rmSync(join(base, "track-push"), { force: true });
+  rmSync(join(base, "exists"), { force: true });
+  expect([a.code, b.code]).toEqual([0, 0]);
+  expect(log().match(/^docker buildx build /gm)?.length).toBe(1);
+  expect(log().match(/^crane push /gm)?.length).toBe(1);
+}, 60_000);
 
 test("an upload that keeps failing stops the push after three attempts and says so", async () => {
   writeFileSync(join(repo, "stuck.txt"), "change\n");

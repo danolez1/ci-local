@@ -9,7 +9,8 @@ import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { recompressLayers } from "./recompress.ts";
-import { acquirePool, IMAGES_AT_ONCE } from "./queue.ts";
+import { markPublished, publishKey, wasPublished } from "./published.ts";
+import { acquirePool, IMAGES_AT_ONCE, pruneIdleTagPools } from "./queue.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
@@ -62,7 +63,10 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   // Ends a wait for a share of the docker CPUs when the image fails before its build gets one.
   const queueAbort = new AbortController();
   const queuedAt = Date.parse(run.record.started);
-  let giveImageSlot: (() => void) | undefined;
+  const gives: Array<() => void> = [];
+  const giveAll = (): void => {
+    for (const give of gives.splice(0).reverse()) give();
+  };
   const onLine = (line: string) => run.log(line);
 
   const cleanup = async () => {
@@ -77,7 +81,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     run.say(`interrupted by ${signal}`);
     run.finish("failed", "interrupted");
     queueAbort.abort();
-    giveImageSlot?.();
+    giveAll();
     killChildren();
     void cleanup().finally(() => process.exit(130));
   };
@@ -86,18 +90,6 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
 
   try {
     run.say(`${spec.image} at ${shortSha(sha)} for ${platform}, profile ${input.profileName} (${profile.transport})`);
-    // However many pushes are running, only this many images are in flight on the machine; the rest wait here, in the order they began.
-    giveImageSlot = await run.phase("queue image", () =>
-      acquirePool({
-        pool: "images",
-        label: spec.image,
-        weight: 1,
-        capacity: IMAGES_AT_ONCE,
-        queuedAt,
-        signal: queueAbort.signal,
-        onWait: (s) => run.say(`image queue: place ${s.position}, ${s.used} of ${s.capacity} image slots in use by ${s.holders.join(", ") || "nobody"}`),
-      }),
-    );
 
     // Not in the commit, so its content has to reach the tag or a changed value would reuse an old image.
     let localEnv: string | undefined;
@@ -129,6 +121,39 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
       }
       if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
     });
+
+    const key = publishKey(spec.image, tag);
+    if (!flags.dry) {
+      pruneIdleTagPools();
+      // Two pushes of the same image content would build and upload it twice. The second waits for the first and then finds the tag in the registry.
+      gives.push(
+        await run.phase("queue tag", () =>
+          acquirePool({
+            pool: `tag-${key}`,
+            label: `${spec.image}:${tag}`,
+            weight: 1,
+            capacity: 1,
+            queuedAt,
+            signal: queueAbort.signal,
+            onWait: (s) => run.say(`${spec.image} with this content is already being built by another run (${s.holders.join(", ")}), waiting for it instead of building it again`),
+          }),
+        ),
+      );
+      // However many pushes are running, only this many images are in flight on the machine; the rest wait here, in the order they began.
+      gives.push(
+        await run.phase("queue image", () =>
+          acquirePool({
+            pool: "images",
+            label: spec.image,
+            weight: 1,
+            capacity: IMAGES_AT_ONCE,
+            queuedAt,
+            signal: queueAbort.signal,
+            onWait: (s) => run.say(`image queue: place ${s.position}, ${s.used} of ${s.capacity} image slots in use by ${s.holders.join(", ") || "nobody"}`),
+          }),
+        ),
+      );
+    }
 
     if (flags.dry) {
       const guards = checksFor(input.checks, spec.name);
@@ -226,7 +251,8 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     // Pushing still waits for every check, and a failed check stops the build.
     const guards = flags.noChecks ? [] : checksFor(input.checks, spec.name);
     let building: Promise<string> | undefined;
-    if (spec.build_during_checks && guards.length > 0) {
+    // A tag another run has already published only needs the registry to confirm it, so the build is not started ahead of the checks.
+    if (spec.build_during_checks && guards.length > 0 && !wasPublished(key)) {
       building = (async () => {
         await checkDocker();
         return packageImage();
@@ -258,6 +284,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
       await stopBuilding();
       run.say(`${tag} is already in the registry, build skipped`);
       run.set({ pushed: true });
+      markPublished(key);
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
       run.finish("skipped");
       run.say(`deploy image: ${pullRef}`);
@@ -271,6 +298,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
         await registry!.push(artifact, spec.image, tag, { onLine, onProgress: (push) => run.set({ push }) });
       });
       run.set({ pushed: true });
+      markPublished(key);
       if (flags.retag) await run.phase("retag", () => registry!.tag(spec.image, tag, "prod"));
       run.say(`deploy image: ${pullRef}`);
     }
@@ -286,7 +314,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     queueAbort.abort();
-    giveImageSlot?.();
+    giveAll();
     await cleanup();
   }
 }

@@ -159,6 +159,25 @@ export async function acquirePool(req: PoolRequest): Promise<() => void> {
   }
 }
 
+/** Drops the lock pools of image tags that nobody has used for a day, so the state folder does not collect one per build. */
+export function pruneIdleTagPools(): void {
+  const root = join(stateHome(), "queue");
+  let pools: string[] = [];
+  try {
+    pools = readdirSync(root).filter((name) => name.startsWith("tag-"));
+  } catch {
+    return;
+  }
+  for (const pool of pools) {
+    try {
+      if (Date.now() - statSync(poolDir(pool)).mtimeMs < 24 * 3_600_000) continue;
+      if (readClaims(holdingDir(pool)).length + readClaims(waitingDir(pool)).length === 0) rmSync(poolDir(pool), { recursive: true, force: true });
+    } catch {
+      // Another run is using it.
+    }
+  }
+}
+
 /** Holds a share of the pool while fn runs. */
 export async function withPool<T>(req: PoolRequest, fn: () => Promise<T>): Promise<T> {
   const release = await acquirePool(req);
