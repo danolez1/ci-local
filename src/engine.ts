@@ -9,6 +9,7 @@ import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { recompressLayers } from "./recompress.ts";
+import { MACHINE_IMAGE_SLOTS, acquireImageSlot } from "./slots.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
@@ -58,6 +59,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   let workDir: string | undefined;
   let localTag: string | undefined;
   let cleaned = false;
+  let releaseSlot: (() => void) | undefined;
   const onLine = (line: string) => run.log(line);
 
   const cleanup = async () => {
@@ -72,6 +74,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     run.say(`interrupted by ${signal}`);
     run.finish("failed", "interrupted");
     killChildren();
+    releaseSlot?.();
     void cleanup().finally(() => process.exit(130));
   };
   process.once("SIGINT", onSignal);
@@ -79,6 +82,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
 
   try {
     run.say(`${spec.image} at ${shortSha(sha)} for ${platform}, profile ${input.profileName} (${profile.transport})`);
+    releaseSlot = await acquireImageSlot(() => run.say(`${MACHINE_IMAGE_SLOTS} images are already running on this machine, waiting for a free slot`));
 
     // Not in the commit, so its content has to reach the tag or a changed value would reuse an old image.
     let localEnv: string | undefined;
@@ -244,6 +248,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
+    releaseSlot?.();
     await cleanup();
   }
 }
