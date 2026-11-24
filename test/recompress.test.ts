@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
-import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { has, must } from "../src/exec.ts";
@@ -76,4 +76,48 @@ zstdTest("levels above 19 work too", async () => {
   makeOciLayout(join(base, "ultra"), ["u".repeat(30_000)]);
   const stats = await recompressLayers(join(base, "ultra"), 20, join(base, "cache-ultra"), () => {});
   expect(stats.compressed).toBe(1);
+});
+
+const cacheEntry = (cache: string, level: number, layerDigest: string): { file: string; meta: { digest: string; size: number } } => {
+  const stem = join(cache, String(level), layerDigest.slice("sha256:".length));
+  return { file: `${stem}.zst`, meta: JSON.parse(readFileSync(`${stem}.json`, "utf8")) };
+};
+
+const sha = (file: string): string => `sha256:${createHash("sha256").update(readFileSync(file)).digest("hex")}`;
+
+zstdTest("two images compressing the same layer at once both record the whole blob", async () => {
+  const cache = join(base, "cache-race");
+  const shared = randomBytes(6_000_000).toString("hex");
+  const { layerDigests } = makeOciLayout(join(base, "race-a"), [shared]);
+  makeOciLayout(join(base, "race-b"), [shared]);
+  const first = recompressLayers(join(base, "race-a"), 9, cache, () => {});
+  await Bun.sleep(150);
+  await Promise.all([first, recompressLayers(join(base, "race-b"), 9, cache, () => {})]);
+
+  const entry = cacheEntry(cache, 9, layerDigests[0] as string);
+  expect(entry.meta.size).toBe(statSync(entry.file).size);
+  expect(entry.meta.digest).toBe(sha(entry.file));
+  for (const name of ["race-a", "race-b"]) {
+    const index = JSON.parse(readFileSync(join(base, name, "index.json"), "utf8"));
+    const layer = JSON.parse(readFileSync(blob(join(base, name), index.manifests[0].digest), "utf8")).layers[0];
+    expect(statSync(blob(join(base, name), layer.digest)).size).toBe(layer.size);
+    expect(sha(blob(join(base, name), layer.digest))).toBe(layer.digest);
+  }
+});
+
+zstdTest("a cache record that disagrees with its blob is rebuilt, not uploaded", async () => {
+  const cache = join(base, "cache-stale");
+  const text = "stale record ".repeat(40_000);
+  const { layerDigests } = makeOciLayout(join(base, "stale-a"), [text]);
+  await recompressLayers(join(base, "stale-a"), 3, cache, () => {});
+  const entry = cacheEntry(cache, 3, layerDigests[0] as string);
+  writeFileSync(entry.file.replace(/\.zst$/, ".json"), JSON.stringify({ digest: `sha256:${"0".repeat(64)}`, size: entry.meta.size - 7 }));
+
+  makeOciLayout(join(base, "stale-b"), [text]);
+  await recompressLayers(join(base, "stale-b"), 3, cache, () => {});
+  const index = JSON.parse(readFileSync(join(base, "stale-b", "index.json"), "utf8"));
+  const layer = JSON.parse(readFileSync(blob(join(base, "stale-b"), index.manifests[0].digest), "utf8")).layers[0];
+  expect(layer.size).toBe(entry.meta.size);
+  expect(layer.digest).toBe(entry.meta.digest);
+  expect(cacheEntry(cache, 3, layerDigests[0] as string).meta).toEqual(entry.meta);
 });
