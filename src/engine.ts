@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checksFor, runChecks } from "./checks.ts";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
-import { parseDockerCpus, withProxyHint } from "./docker.ts";
+import { parseDockerCpus, SHARED_JOB_GONE, withProxyHint } from "./docker.ts";
 import { exec, has, inChildGroup, killChildren, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
 import { placeFile, readExtractedFile, within } from "./paths.ts";
@@ -170,19 +170,23 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
           if (spec.build_args_file) {
             for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
           }
-          const r = await exec(
-            [
-              "docker", "buildx", "build",
-              "--platform", platform,
-              "--provenance=false", "--sbom=false", "--progress=plain",
-              "-f", within(ctx, spec.dockerfile),
-              ...(spec.target ? ["--target", spec.target] : []),
-              ...buildArgs,
-              ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir()},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
-              within(ctx, spec.context),
-            ],
-            { onLine },
-          );
+          const buildCommand = [
+            "docker", "buildx", "build",
+            "--platform", platform,
+            "--provenance=false", "--sbom=false", "--progress=plain",
+            "-f", within(ctx, spec.dockerfile),
+            ...(spec.target ? ["--target", spec.target] : []),
+            ...buildArgs,
+            ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir()},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
+            within(ctx, spec.context),
+          ];
+          let r = await exec(buildCommand, { onLine });
+          // buildkit shares a step between builds that run together, so one cancelled by a failed check can take the step down with it.
+          if (r.code !== 0 && SHARED_JOB_GONE.test(r.out + r.err)) {
+            run.say("buildkit lost a step shared with a cancelled build, building again");
+            await Bun.sleep(3000);
+            r = await exec(buildCommand, { onLine });
+          }
           if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
         });
       } finally {

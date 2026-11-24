@@ -22,3 +22,6 @@ export function parseDockerCpus(out: string): number {
   const n = Number.parseInt(out.trim(), 10);
   return Number.isInteger(n) && n >= 1 ? n : 1;
 }
+
+/** What buildkit says when a step this build joined was owned by a build that has since been cancelled. */
+export const SHARED_JOB_GONE = /forwarding Ping: no such job|no such job/i;

@@ -31,6 +31,7 @@ case "$1" in
   info) exit 0 ;;
   buildx)
     [ -f "${base}/fail-build" ] && exit 1
+    [ -f "${base}/lose-job-once" ] && { rm "${base}/lose-job-once"; echo "ERROR: failed to build: NotFound: forwarding Ping: no such job abc" >&2; exit 1; }
     case "$*" in *type=oci*) cp -R "${base}/fixture-oci" "$(printf '%s' "$*" | sed -n 's/.*dest=\\([^, ]*\\).*/\\1/p')" ;; esac
     exit 0 ;;
   save) while [ $# -gt 0 ]; do [ "$1" = "-o" ] && : > "$2"; shift; done; exit 0 ;;
@@ -133,6 +134,17 @@ test("a dropped upload is retried and the push still goes through", async () => 
   const r = await push();
   expect(r.code).toBe(0);
   expect(log().match(/^crane push /gm)?.length).toBe(2);
+});
+
+test("a build that lost a buildkit step shared with a cancelled build is run again", async () => {
+  writeFileSync(join(repo, "lost.txt"), "change\n");
+  await gitc("add", "-A");
+  await gitc("commit", "-qm", "lost job");
+  writeFileSync(join(base, "lose-job-once"), "");
+  writeFileSync(calls, "");
+  const r = await push();
+  expect(r.code).toBe(0);
+  expect(log().match(/^docker buildx build /gm)?.length).toBe(2);
 });
 
 test("an upload that keeps failing stops the push after three attempts and says so", async () => {
