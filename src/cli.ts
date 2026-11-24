@@ -12,7 +12,7 @@ import { childEnv, exec, has } from "./exec.ts";
 import { checkedOutRef, committedFile, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
 import { isSafeRelative, readExtractedFile } from "./paths.ts";
 import { findEarlyExit, findHookTarget, installHook, isInstalled, isLastStep, isShellHook, uninstallHook, type HookKind } from "./hooks.ts";
-import { queueSnapshot } from "./queue.ts";
+import { IMAGES_AT_ONCE, queueSnapshot } from "./queue.ts";
 import { latestRunId, listRuns, readLog, readRun, stateHome } from "./store.ts";
 import type { RepoConfig, RunRecord } from "./types.ts";
 import { startUi } from "./ui/server.ts";
@@ -93,8 +93,8 @@ async function runAll(opts: { cwd: string; sha?: string; images?: string[]; prof
   const sha = await resolveSha(ctx.root, opts.sha ?? "HEAD");
   const wanted = opts.images?.length ? ctx.config.images.filter((i) => opts.images?.includes(i.name)) : ctx.config.images;
   if (wanted.length === 0) throw new ConfigError([`no image matches ${opts.images?.join(", ")} (known: ${ctx.config.images.map((i) => i.name).join(", ")})`]);
-  // Images wait cheaply in the queues, which order the checks and the builds, so by default every image starts at once.
-  const jobs = Math.min(opts.jobs ?? ctx.config.concurrency ?? wanted.length, wanted.length);
+  // The queues order the work across pushes; this keeps one push from filling the image slots with its whole list.
+  const jobs = Math.min(opts.jobs ?? ctx.config.concurrency ?? IMAGES_AT_ONCE, wanted.length);
   return pool(wanted, jobs, (spec) => {
     const flags = jobs > 1 ? { ...opts.flags, echoPrefix: `[${spec.name}] ` } : opts.flags;
     return runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, publicJwtKeys: ctx.config.public_jwt_keys, checks: ctx.config.checks, flags });

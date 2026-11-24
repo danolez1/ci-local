@@ -57,7 +57,7 @@ describe("repo config", () => {
     expect(() => parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: yes please\n")).toThrow(/build_during_checks must be true or false/);
   });
 
-  test("every image of a push starts unless concurrency caps them, within a ceiling", () => {
+  test("concurrency is optional and stays within a ceiling", () => {
     expect(parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n").concurrency).toBeUndefined();
     expect(parseRepoConfig("version: 1\nconcurrency: 3\nimages:\n  - image: acme/web\n").concurrency).toBe(3);
     for (const bad of ["0", "9", "2.5", "many"]) {

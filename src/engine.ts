@@ -9,7 +9,7 @@ import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { recompressLayers } from "./recompress.ts";
-import { acquirePool } from "./queue.ts";
+import { acquirePool, IMAGES_AT_ONCE } from "./queue.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
@@ -62,6 +62,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   // Ends a wait for a share of the docker CPUs when the image fails before its build gets one.
   const queueAbort = new AbortController();
   const queuedAt = Date.parse(run.record.started);
+  let giveImageSlot: (() => void) | undefined;
   const onLine = (line: string) => run.log(line);
 
   const cleanup = async () => {
@@ -76,6 +77,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     run.say(`interrupted by ${signal}`);
     run.finish("failed", "interrupted");
     queueAbort.abort();
+    giveImageSlot?.();
     killChildren();
     void cleanup().finally(() => process.exit(130));
   };
@@ -84,6 +86,18 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
 
   try {
     run.say(`${spec.image} at ${shortSha(sha)} for ${platform}, profile ${input.profileName} (${profile.transport})`);
+    // However many pushes are running, only this many images are in flight on the machine; the rest wait here, in the order they began.
+    giveImageSlot = await run.phase("queue image", () =>
+      acquirePool({
+        pool: "images",
+        label: spec.image,
+        weight: 1,
+        capacity: IMAGES_AT_ONCE,
+        queuedAt,
+        signal: queueAbort.signal,
+        onWait: (s) => run.say(`image queue: place ${s.position}, ${s.used} of ${s.capacity} image slots in use by ${s.holders.join(", ") || "nobody"}`),
+      }),
+    );
 
     // Not in the commit, so its content has to reach the tag or a changed value would reuse an old image.
     let localEnv: string | undefined;
@@ -272,6 +286,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
     queueAbort.abort();
+    giveImageSlot?.();
     await cleanup();
   }
 }

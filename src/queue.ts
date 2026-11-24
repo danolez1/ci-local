@@ -31,6 +31,9 @@ export interface PoolRequest {
   onWait?: (standing: Standing) => void;
 }
 
+/** Images in flight at once on the machine, across every push; more than this loads it past what the builds can use. */
+export const IMAGES_AT_ONCE = 3;
+
 const POLL_MS = 400;
 const LOCK_STALE_MS = 10_000;
 

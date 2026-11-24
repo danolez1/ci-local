@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { acquirePool, queueSnapshot } from "../src/queue.ts";
+import { acquirePool, IMAGES_AT_ONCE, queueSnapshot } from "../src/queue.ts";
 
 let state: string;
 beforeEach(() => {
@@ -127,3 +127,19 @@ test("separate processes never hold more than the capacity together", async () =
   // With all of them waiting, they are served in the order their pushes began: a light job never jumps a heavy one before it.
   expect(started).toEqual(["a", "b", "c", "d", "e", "f", "g"]);
 }, 30_000);
+
+test("the machine holds three images in flight and the fourth waits for one to finish", async () => {
+  const slot = (label: string, queuedAt: number, extra: Partial<Parameters<typeof acquirePool>[0]> = {}) => acquirePool({ pool: "images", label, weight: 1, capacity: IMAGES_AT_ONCE, queuedAt, ...extra });
+  const held = [await slot("a", 1), await slot("b", 2), await slot("c", 3)];
+  let got = false;
+  const fourth = slot("d", 4).then((release) => {
+    got = true;
+    return release;
+  });
+  await Bun.sleep(700);
+  expect(got).toBe(false);
+  held[0]?.();
+  (await fourth)();
+  held[1]?.();
+  held[2]?.();
+});

@@ -54,7 +54,7 @@ export interface RepoConfig {
   profile?: string;
   profiles: Record<string, Profile>;
   branches: string[];
-  /** Caps the images of one push that are in flight; without it every image is, and the queues order their work. */
+  /** Caps the images of one push that are in flight; without it 3, the number the machine allows across all pushes. */
   concurrency?: number;
   public_prefixes: string[];
   public_jwt_keys: string[];
