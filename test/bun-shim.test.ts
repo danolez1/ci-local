@@ -19,18 +19,18 @@ function run(args: string[], env: Record<string, string> = {}): string {
   return new TextDecoder().decode(r.stdout).trim();
 }
 
-test("bun test gets a timeout and one retry", () => {
-  expect(run(["test"])).toBe("test --timeout 30000 --retry 1");
-  expect(run(["test", "tests/a.test.ts", "--parallel=4"])).toBe("test --timeout 30000 --retry 1 tests/a.test.ts --parallel=4");
+test("bun test gets a timeout and three retries", () => {
+  expect(run(["test"])).toBe("test --timeout 30000 --retry 3");
+  expect(run(["test", "tests/a.test.ts", "--parallel=4"])).toBe("test --timeout 30000 --retry 3 tests/a.test.ts --parallel=4");
 });
 
 test("flags the caller already gave are left alone", () => {
-  expect(run(["test", "--timeout", "10000", "x"])).toBe("test --retry 1 --timeout 10000 x");
+  expect(run(["test", "--timeout", "10000", "x"])).toBe("test --retry 3 --timeout 10000 x");
   expect(run(["test", "--timeout=10000", "--retry", "0"])).toBe("test --timeout=10000 --retry 0");
 });
 
 test("bun --bun test is recognised and keeps its prefix", () => {
-  expect(run(["--bun", "test", "t"])).toBe("--bun test --timeout 30000 --retry 1 t");
+  expect(run(["--bun", "test", "t"])).toBe("--bun test --timeout 30000 --retry 3 t");
 });
 
 test("every other bun command passes through untouched", () => {
@@ -53,7 +53,7 @@ test("a check runs with the shim directory first on PATH and the real bun rememb
 });
 
 test("the real bun is still found when turbo strips every CI_LOCAL variable", () => {
-  expect(run(["test"])).toBe("test --timeout 30000 --retry 1");
+  expect(run(["test"])).toBe("test --timeout 30000 --retry 3");
 });
 
 test("a stale CI_LOCAL_REAL_BUN is ignored in favour of the first bun on PATH after the shim", () => {
