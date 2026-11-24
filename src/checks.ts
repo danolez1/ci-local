@@ -3,7 +3,8 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { exec } from "./exec.ts";
-import { Mutex, shareInFlight } from "./inflight.ts";
+import { shareInFlight } from "./inflight.ts";
+import { withPool } from "./queue.ts";
 import { shortSha } from "./git.ts";
 import { stateHome } from "./store.ts";
 import type { RunHandle } from "./store.ts";
@@ -50,8 +51,9 @@ export function checkEnv(image: string | undefined, path: string | undefined = p
   return env;
 }
 
-// A repository's checks share its working tree, its test database and its lane's export folder, so images that run side by side take turns on them.
-const checksTurn = new Mutex();
+// Checks share a repository's working tree, its test database and its lane's export folder, and they load every core of the machine,
+// so the checks of every image of every push take turns, in the order the images began.
+const CHECKS_POOL = { pool: "checks", weight: 1, capacity: 1 } as const;
 
 /**
  * Runs the checks that guard one image (tests, scans) before it is built, and stops the run when one fails.
@@ -66,7 +68,14 @@ export async function runChecks(run: RunHandle, root: string, sha: string, allCh
   const head = await git(root, "rev-parse", "HEAD");
   const clean = head === sha && (await git(root, "status", "--porcelain", "--untracked-files=no")) === "";
 
-  await checksTurn.run(async () => {
+  const isFresh = (check: Check): boolean => {
+    const stamp = readStamp(stampFile(root, check, image));
+    return stamp !== null && stamp.tree === tree && stamp.command === digest(check.run) && (check.ttl_hours === 0 || Date.now() - stamp.at < check.ttl_hours * 3_600_000);
+  };
+  // Nothing to run means nothing to wait for.
+  const turn = checks.every(isFresh) ? <T>(fn: () => Promise<T>) => fn() : <T>(fn: () => Promise<T>) => withPool({ ...CHECKS_POOL, label: `${image} checks`, queuedAt: Date.parse(run.record.started), onWait: (s) => run.say(`checks queue: place ${s.position}, running now: ${s.holders.join(", ") || "nobody"}${s.ahead.length ? `, ahead: ${s.ahead.join(", ")}` : ""}`) }, fn);
+
+  await turn(async () => {
     for (const check of checks) {
       const file = stampFile(root, check, image);
       const command = digest(check.run);

@@ -43,14 +43,22 @@ describe("repo config", () => {
     }
   });
 
+  test("an image needs one docker CPU for its build unless weight says more", () => {
+    const c = parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    weight: 3\n  - image: acme/api\n");
+    expect(c.images.map((i) => i.weight)).toEqual([3, 1]);
+    for (const bad of ["0", "2.5", "many", "65"]) {
+      expect(() => parseRepoConfig(`version: 1\nimages:\n  - image: acme/web\n    weight: ${bad}\n`)).toThrow(/weight must be a whole number from 1 to 64/);
+    }
+  });
+
   test("an image builds after its checks unless it opts in to building during them", () => {
     const c = parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: true\n  - image: acme/api\n");
     expect(c.images.map((i) => i.build_during_checks)).toEqual([true, false]);
     expect(() => parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n    build_during_checks: yes please\n")).toThrow(/build_during_checks must be true or false/);
   });
 
-  test("images run one after another unless concurrency says otherwise, within a ceiling", () => {
-    expect(parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n").concurrency).toBe(1);
+  test("every image of a push starts unless concurrency caps them, within a ceiling", () => {
+    expect(parseRepoConfig("version: 1\nimages:\n  - image: acme/web\n").concurrency).toBeUndefined();
     expect(parseRepoConfig("version: 1\nconcurrency: 3\nimages:\n  - image: acme/web\n").concurrency).toBe(3);
     for (const bad of ["0", "9", "2.5", "many"]) {
       expect(() => parseRepoConfig(`version: 1\nconcurrency: ${bad}\nimages:\n  - image: acme/web\n`)).toThrow(/concurrency must be a whole number from 1 to 8/);

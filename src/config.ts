@@ -105,10 +105,21 @@ function parseChecks(raw: unknown, problems: string[], imageNames: string[]): Ch
 const MAX_CONCURRENCY = 8;
 
 // Builds share this machine's CPU and docker, so the ceiling stops a typo from starting dozens at once.
-function parseConcurrency(v: unknown, problems: string[]): number {
-  if (v === undefined) return 1;
+function parseConcurrency(v: unknown, problems: string[]): number | undefined {
+  if (v === undefined) return undefined;
   if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > MAX_CONCURRENCY) {
     problems.push(`concurrency must be a whole number from 1 to ${MAX_CONCURRENCY}`);
+    return undefined;
+  }
+  return v;
+}
+
+const MAX_WEIGHT = 64;
+
+function parseWeight(v: unknown, where: string, problems: string[]): number {
+  if (v === undefined) return 1;
+  if (typeof v !== "number" || !Number.isInteger(v) || v < 1 || v > MAX_WEIGHT) {
+    problems.push(`${where} must be a whole number from 1 to ${MAX_WEIGHT}`);
     return 1;
   }
   return v;
@@ -225,6 +236,7 @@ export function parseRepoConfig(text: string): RepoConfig {
         compression: oneOf(item.compression, ["gzip", "zstd"], `${where}.compression`, problems) ?? "gzip",
         zstd_level: zstdLevel(item.zstd_level, `${where}.zstd_level`, problems) ?? DEFAULT_ZSTD_LEVEL,
         build_during_checks: flag(item.build_during_checks, `${where}.build_during_checks`, problems) ?? false,
+        weight: parseWeight(item.weight, `${where}.weight`, problems),
         tag_include: item.tag_include === undefined ? defaults.tag_include : strList(item.tag_include, `${where}.tag_include`, problems),
         tag_exclude: item.tag_exclude === undefined ? defaults.tag_exclude : strList(item.tag_exclude, `${where}.tag_exclude`, problems),
       });

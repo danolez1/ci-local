@@ -33,6 +33,8 @@ export interface ImageSpec {
   zstd_level: number;
   /** Build while the checks run instead of after them; the push still waits for every check. */
   build_during_checks: boolean;
+  /** Docker CPUs the build needs to itself; the builds running side by side never add up to more than the daemon has. */
+  weight: number;
   tag_include: string[];
   tag_exclude: string[];
 }
@@ -52,8 +54,8 @@ export interface RepoConfig {
   profile?: string;
   profiles: Record<string, Profile>;
   branches: string[];
-  /** How many images run at once; 1 keeps them one after another. */
-  concurrency: number;
+  /** Caps the images of one push that are in flight; without it every image is, and the queues order their work. */
+  concurrency?: number;
   public_prefixes: string[];
   public_jwt_keys: string[];
   images: ImageSpec[];

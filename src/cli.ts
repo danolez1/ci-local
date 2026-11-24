@@ -12,6 +12,7 @@ import { childEnv, exec, has } from "./exec.ts";
 import { checkedOutRef, committedFile, parsePrePushRefs, repoRoot, resolveSha } from "./git.ts";
 import { isSafeRelative, readExtractedFile } from "./paths.ts";
 import { findEarlyExit, findHookTarget, installHook, isInstalled, isLastStep, isShellHook, uninstallHook, type HookKind } from "./hooks.ts";
+import { queueSnapshot } from "./queue.ts";
 import { latestRunId, listRuns, readLog, readRun, stateHome } from "./store.ts";
 import type { RepoConfig, RunRecord } from "./types.ts";
 import { startUi } from "./ui/server.ts";
@@ -26,6 +27,7 @@ const HELP = `ci-local: build images on this machine and publish them to a regis
   ci-local status [-n 10] [--json]  recent runs
   ci-local logs [id] [-f]         a run's log (newest by default), -f follows it
   ci-local watch                  live terminal view
+  ci-local queue                  who holds and who waits for the checks and the docker CPUs, in the order they are served
   ci-local ui [--port 7777]       start the local web view in the background and return; a second call prints the running one
   ci-local ui-stop                stop the background web view (same as ui stop)
   ci-local ui serve [--port 7777] the web view in this terminal (ctrl-c stops it)
@@ -91,7 +93,8 @@ async function runAll(opts: { cwd: string; sha?: string; images?: string[]; prof
   const sha = await resolveSha(ctx.root, opts.sha ?? "HEAD");
   const wanted = opts.images?.length ? ctx.config.images.filter((i) => opts.images?.includes(i.name)) : ctx.config.images;
   if (wanted.length === 0) throw new ConfigError([`no image matches ${opts.images?.join(", ")} (known: ${ctx.config.images.map((i) => i.name).join(", ")})`]);
-  const jobs = Math.min(opts.jobs ?? ctx.config.concurrency, wanted.length);
+  // Images wait cheaply in the queues, which order the checks and the builds, so by default every image starts at once.
+  const jobs = Math.min(opts.jobs ?? ctx.config.concurrency ?? wanted.length, wanted.length);
   return pool(wanted, jobs, (spec) => {
     const flags = jobs > 1 ? { ...opts.flags, echoPrefix: `[${spec.name}] ` } : opts.flags;
     return runImage({ root: ctx.root, sha, spec, profileName: ctx.profileName, profile: ctx.profile, publicPrefixes: ctx.config.public_prefixes, publicJwtKeys: ctx.config.public_jwt_keys, checks: ctx.config.checks, flags });
@@ -268,6 +271,20 @@ async function cmdLogs(a: Args): Promise<number> {
     if (offset < size) continue;
     if (!a.flags.has("f") || readRun(id)?.status !== "running") break;
     await Bun.sleep(700);
+  }
+  return 0;
+}
+
+function cmdQueue(): number {
+  const pools = queueSnapshot().filter((p) => p.holders.length + p.waiting.length > 0);
+  if (pools.length === 0) {
+    console.log("nothing is running or waiting");
+    return 0;
+  }
+  for (const p of pools) {
+    console.log(p.pool);
+    for (const c of p.holders) console.log(`  running  ${c.label}  weight ${c.weight}  pid ${c.pid}`);
+    p.waiting.forEach((c, i) => console.log(`  ${String(i + 1).padStart(2)} waits  ${c.label}  weight ${c.weight}  pid ${c.pid}`));
   }
   return 0;
 }
@@ -506,6 +523,7 @@ async function main(): Promise<number> {
     case "status": return cmdStatus(a);
     case "logs": return cmdLogs(a);
     case "watch": await watch(); return 0;
+    case "queue": return cmdQueue();
     case "ui": return cmdUi(a);
     case "ui-stop": return cmdUiStop();
     case "init": return cmdInit(a);

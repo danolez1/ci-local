@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { parseGlobalConfig } from "../src/config.ts";
-import { daemonProxies, withProxyHint } from "../src/docker.ts";
+import { daemonProxies, parseDockerCpus, withProxyHint } from "../src/docker.ts";
 import { exec, setProxyMode, withoutProxy } from "../src/exec.ts";
 
 const info = ` HTTP Proxy: http://proxy.orb.internal:8305
@@ -41,4 +41,10 @@ test("a profile's proxy setting defaults to none and rejects other values", () =
   expect(parseGlobalConfig("profiles:\n  p: { transport: direct, registry: r:1 }\n").profiles.p?.proxy).toBe("none");
   expect(parseGlobalConfig("profiles:\n  p: { transport: direct, registry: r:1, proxy: inherit }\n").profiles.p?.proxy).toBe("inherit");
   expect(() => parseGlobalConfig("profiles:\n  p: { transport: direct, registry: r:1, proxy: auto }\n")).toThrow(/proxy must be none or inherit/);
+});
+
+test("the daemon's CPU count is read from docker info, and anything unreadable counts as one", () => {
+  expect(parseDockerCpus("3\n")).toBe(3);
+  expect(parseDockerCpus("")).toBe(1);
+  expect(parseDockerCpus("0")).toBe(1);
 });

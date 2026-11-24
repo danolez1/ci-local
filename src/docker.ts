@@ -16,3 +16,9 @@ export const PROXY_HINT =
 export function withProxyHint(message: string, buildOutput: string): string {
   return /proxyconnect/.test(buildOutput) ? `${message} (${PROXY_HINT})` : message;
 }
+
+/** CPUs the docker daemon's VM has; builds share only these, whatever the host has. */
+export function parseDockerCpus(out: string): number {
+  const n = Number.parseInt(out.trim(), 10);
+  return Number.isInteger(n) && n >= 1 ? n : 1;
+}

@@ -3,13 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { checksFor, runChecks } from "./checks.ts";
 import { guardBuildEnv, parseEnvLines } from "./envguard.ts";
-import { withProxyHint } from "./docker.ts";
+import { parseDockerCpus, withProxyHint } from "./docker.ts";
 import { exec, has, inChildGroup, killChildren, must, setProxyMode } from "./exec.ts";
 import { archiveTo, committedFile, isCommitted, shortSha, treeHash } from "./git.ts";
 import { placeFile, readExtractedFile, within } from "./paths.ts";
 import { openRegistry, type Registry } from "./registry.ts";
 import { recompressLayers } from "./recompress.ts";
-import { MACHINE_IMAGE_SLOTS, acquireImageSlot } from "./slots.ts";
+import { acquirePool } from "./queue.ts";
 import { RunHandle, zstdCacheDir } from "./store.ts";
 import type { Check, ImageSpec, Profile, RunRecord } from "./types.ts";
 
@@ -59,7 +59,9 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   let workDir: string | undefined;
   let localTag: string | undefined;
   let cleaned = false;
-  let releaseSlot: (() => void) | undefined;
+  // Ends a wait for a share of the docker CPUs when the image fails before its build gets one.
+  const queueAbort = new AbortController();
+  const queuedAt = Date.parse(run.record.started);
   const onLine = (line: string) => run.log(line);
 
   const cleanup = async () => {
@@ -73,8 +75,8 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   const onSignal = (signal: string) => {
     run.say(`interrupted by ${signal}`);
     run.finish("failed", "interrupted");
+    queueAbort.abort();
     killChildren();
-    releaseSlot?.();
     void cleanup().finally(() => process.exit(130));
   };
   process.once("SIGINT", onSignal);
@@ -82,7 +84,6 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
 
   try {
     run.say(`${spec.image} at ${shortSha(sha)} for ${platform}, profile ${input.profileName} (${profile.transport})`);
-    releaseSlot = await acquireImageSlot(() => run.say(`${MACHINE_IMAGE_SLOTS} images are already running on this machine, waiting for a free slot`));
 
     // Not in the commit, so its content has to reach the tag or a changed value would reuse an old image.
     let localEnv: string | undefined;
@@ -144,32 +145,49 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
       });
 
       // The image is exported as an OCI layout and recompressed, so it is never loaded into the local daemon.
-      await run.phase("build", async () => {
-        // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
-        for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
-          if (!file) continue;
-          const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file, input.publicJwtKeys);
-          if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
-        }
-        const buildArgs: string[] = [];
-        if (spec.build_args_file) {
-          for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
-        }
-        const r = await exec(
-          [
-            "docker", "buildx", "build",
-            "--platform", platform,
-            "--provenance=false", "--sbom=false", "--progress=plain",
-            "-f", within(ctx, spec.dockerfile),
-            ...(spec.target ? ["--target", spec.target] : []),
-            ...buildArgs,
-            ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir()},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
-            within(ctx, spec.context),
-          ],
-          { onLine },
-        );
-        if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
-      });
+      // The docker VM has a few CPUs for every image of every push; builds that share them finish far later than one after another.
+      const cpus = parseDockerCpus((await exec(["docker", "info", "--format", "{{.NCPU}}"])).out);
+      const give = await run.phase("queue build", () =>
+        acquirePool({
+          pool: "build",
+          label: spec.image,
+          weight: spec.weight,
+          capacity: cpus,
+          queuedAt,
+          signal: queueAbort.signal,
+          onWait: (s) => run.say(`build queue: place ${s.position}, ${s.used} of ${s.capacity} docker CPUs in use by ${s.holders.join(", ") || "nobody"}${s.ahead.length ? `, ahead: ${s.ahead.join(", ")}` : ""}`),
+        }),
+      );
+      try {
+        await run.phase("build", async () => {
+          // Re-checking the extracted files closes any gap between the committed blobs the guard read and what the build sees.
+          for (const file of [spec.build_env, spec.build_env_local, spec.build_args_file]) {
+            if (!file) continue;
+            const problems = guardBuildEnv(readExtractedFile(ctx, file), input.publicPrefixes, file, input.publicJwtKeys);
+            if (problems.length) throw new Error(`refusing to build:\n${problems.join("\n")}`);
+          }
+          const buildArgs: string[] = [];
+          if (spec.build_args_file) {
+            for (const { key, value } of parseEnvLines(readExtractedFile(ctx, spec.build_args_file))) buildArgs.push("--build-arg", `${key}=${value}`);
+          }
+          const r = await exec(
+            [
+              "docker", "buildx", "build",
+              "--platform", platform,
+              "--provenance=false", "--sbom=false", "--progress=plain",
+              "-f", within(ctx, spec.dockerfile),
+              ...(spec.target ? ["--target", spec.target] : []),
+              ...buildArgs,
+              ...(zstd ? ["--output", `type=oci,tar=false,dest=${ociDir()},compression=uncompressed,force-compression=true`] : ["-t", localTag as string, "--load"]),
+              within(ctx, spec.context),
+            ],
+            { onLine },
+          );
+          if (r.code !== 0) throw new Error(withProxyHint(`docker build exited ${r.code}`, r.out + r.err));
+        });
+      } finally {
+        give();
+      }
 
       if (!flags.push) return "";
       if (zstd) {
@@ -199,6 +217,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
     }
     const stopBuilding = async () => {
       if (!building) return;
+      queueAbort.abort();
       killChildren();
       await building.catch(() => {});
     };
@@ -248,7 +267,7 @@ async function runImageInGroup(input: RunInput): Promise<RunRecord> {
   } finally {
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
-    releaseSlot?.();
+    queueAbort.abort();
     await cleanup();
   }
 }
