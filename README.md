@@ -18,6 +18,12 @@ A failed check, build or upload stops the push. If the registry already has an i
 
 `ci-local ui` starts a local web view of your runs in the background. You can search and filter the list, read each run's phases and log, follow an upload, and stop or delete one run or many.
 
+![The runs list with the Actions menu open](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/runs-list.png)
+
+![A run in its push phase with the upload progress bar](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/run-push.png)
+
+![The runs list in the dark theme](https://raw.githubusercontent.com/danolez1/ci-local/main/docs/images/runs-dark.png)
+
 ## Developer docs
 
 ### Install
